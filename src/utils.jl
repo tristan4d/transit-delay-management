@@ -4,12 +4,23 @@ using DataFramesMeta
 using Distributions
 
 
-# function to transform "hh:mm:ss" times into a number of hours after 00:00:00
+"""
+    string2time(s::String15)
+
+Compute the hour as a Float32 from `s`.
+
+`s` must be formatted as "hh:mm:ss" and string2time supports times beyond "23:59:59".
+"""
 function string2time(s::String15)
     h, m, s = parse.(Float32, split(s, ":"))
     return h + m / 60 + s / 3600
 end
 
+"""
+    loadGTFS(path::String)
+
+Load and transform GTFS data located at `path` with respect to the current directory.
+"""
 function loadGTFS(path::String)
     # load dataframes for gtfs files
     folder = joinpath(@__DIR__(), path)
@@ -62,7 +73,11 @@ function loadGTFS(path::String)
     return df
 end
 
-# select a subset of trips from a GTFS dataframe
+"""
+    subsetGTFS(df::DataFrame, n::Int[, randomSeed = 1])
+
+Selects a random subset of trips from `df` of size `n`.
+"""
 function subsetGTFS(df::DataFrame, n::Int; randomSeed = 1)
     Random.seed!(randomSeed)
     idx = sample(1:size(df, 1), n, replace = false)
