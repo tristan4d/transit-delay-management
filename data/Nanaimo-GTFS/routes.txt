@@ -1,0 +1,21 @@
+﻿route_id,route_short_name,route_long_name,route_type,route_color,route_text_color
+1-NAN,1,Downtown/ Country Club,3,F00C0C,FFFFFF
+5-NAN,5,Fairview,3,E826CE,FFFFFF
+6-NAN,6,Harewood,3,59EB52,FFFFFF
+7-NAN,7,Cinnabar,3,E99D47,FFFFFF
+8-NAN,8,Cedar to VIU,3,00AA47,FFFFFF
+11-NAN,11,Lantzville,3,455EEC,FFFFFF
+15-NAN,15,VIU Connector,3,975EE8,FFFFFF
+20-NAN,20,Hammond Bay,3,E4E874,FFFFFF
+25-NAN,25,Ferry Shuttle,3,57ECCE,FFFFFF
+30-NAN,30,NRGH,3,EF750A,FFFFFF
+40-NAN,40,VIU EXPRESS,3,F4B099,FFFFFF
+50-NAN,50,Downtown /Woodgrove,3,96AE75,FFFFFF
+70-NAN,70,NCX Nanaimo - Cowichan Express,3,000000,FFFFFF
+78-NAN,78,Cassidy/Airport,3,F37421,FFFFFF
+88-NAN,88,Parksville,3,5FB8E8,FFFFFF
+91-NAN,91,Intercity,3,AE8BDF,FFFFFF
+92-NAN,92,Hammond Bay,3,833C3C,FFFFFF
+97-NAN,97,Eaglecrest,3,EAF20A,FFFFFF
+98-NAN,98,Qualicum Beach,3,08AC75,FFFFFF
+99-NAN,99,Deep Bay,3,6087E1,FFFFFF
