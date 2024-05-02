@@ -3,6 +3,20 @@ using Distances
 using Graphs
 using Random
 
+"""
+	VSPInstance
+
+An instance of the Vehicle Scheduling Problem (VSP).
+
+# Fields
+- `n::Int`: the number of trips in the network plus one, representing the depot.
+- `M::Float64`: maximum possible value for propagated delay of any trip.
+- `l::Vector{Float64}`: expected delays for each trip.
+- `C::Matrix{Float64}`: cost for using arc (i, j) in the VSP network.
+- `B::Matrix{Float64}`: buffer time on arc (i, j) in the VSP network.
+- `G::Matrix{Bool}`: 1 if arc (i, j) is usable in the VSP network, 0 otherwise.
+- `trips::DataFrame`: the trips DataFrame, see `loadGTFS` in utils.jl.
+"""
 struct VSPInstance
 	n::Int # number of trips + depot
 	M::Float64 # big-M constraint variable for propagated delay
@@ -13,6 +27,20 @@ struct VSPInstance
 	trips::DataFrame # trips dataframe
 end
 
+"""
+	VSPInstance(
+		trips::DataFrame[,
+		l::Union{Vector{Float64}, Nothing} = nothing,
+		averageSpeed::Float64 = 30.0,
+		randomSeed = 1
+		]
+	)
+
+Create a VSPInstance object from the `trips` DataFrame.
+
+Expected trip delays may be specified by `l`.  Possible deadheads are determined
+by haversine distance and `averageSpeed`.
+"""
 function VSPInstance(
 	trips::DataFrame;
     l::Union{Vector{Float64}, Nothing} = nothing,
@@ -63,7 +91,14 @@ function VSPInstance(
 	return VSPInstance(n, M, l, C, B, G, trips)
 end
 
-# constructor for subgradient method to generate synthetic network with adjusted link costs
+"""
+	VSPInstance(inst::VSPInstance, λ::Vector{Float64}, s::Vector{Float64})
+
+Create a VSPInstance object from `inst` with adjusted link costs for Lagrangian
+Relaxation.
+
+See `update!` in lagrange.jl.
+"""
 function VSPInstance(inst::VSPInstance, λ::Vector{Float64}, s::Vector{Float64})
 	n = inst.n
 	M = inst.M

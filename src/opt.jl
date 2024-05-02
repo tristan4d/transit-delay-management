@@ -6,6 +6,17 @@ MOA = MultiObjectiveAlgorithms
 
 gurobi_env = Gurobi.Env()
 	
+"""
+    VSPModel
+
+Model for the Vehicle Scheduling Problem (VSP) with propagated delays.
+
+# Fields
+- `inst::VSPInstance`: VSP instance on which the model will be applied.
+- `model::JuMP.Model`: JuMP model for optimization.
+- `x::Matrix{VariableRef}`: references to arc decision variables in the `model`.
+- `s::Vector{VariableRef}`: references to the propagated delay variables in the `model`.
+"""
 struct VSPModel
     inst::VSPInstance # VSP instance
     model::JuMP.Model # VSP model
@@ -13,6 +24,24 @@ struct VSPModel
     s::Vector{VariableRef} # propagated delay variable vector
 end
 
+"""
+    VSPModel(
+        inst::VSPInstance[,
+        warmStart = false,
+        isInt = false,
+        multiObj = false,
+        silent = true,
+        outputFlag = 0,
+        timeLimit = 60
+        ]
+    )
+
+Create a VSP model object from `inst`.
+
+`warmStart` will initialize model variables with the min-cost flow solution.  `isInt`
+enforces if arc decision variables should be integer or not.  `multiObj` enforces
+whether the model should apply ϵ-constrained optimization on the delay and cost objectives.
+"""
 function VSPModel(
     inst::VSPInstance;
     warmStart = false,
@@ -89,6 +118,18 @@ function VSPModel(
     return VSPModel(inst, model, x, s)
 end
 
+"""
+    FirstStageProblem
+
+Model for the Bender's decomposition first-stage problem of the Vehicle Scheduling
+Problem (VSP) with propagated delays.
+
+# Fields
+- `inst::VSPInstance`: VSP instance on which the model will be applied.
+- `model::JuMP.Model`: JuMP model for optimization.
+- `x::Matrix{VariableRef}`: references to arc decision variables in the `model`.
+- `q::VariableRef`: references to the second-stage problem objective value.
+"""
 struct FirstStageProblem
     inst::VSPInstance # VSP instance
     model::JuMP.Model # VSP model
@@ -96,6 +137,17 @@ struct FirstStageProblem
     q::VariableRef # second-stage objective value
 end
 
+"""
+    FirstStageProblem(
+        inst::VSPInstance[,
+        silent = true,
+        outputFlag = 0,
+        timeLimit = 60
+        ]
+    )
+
+Create a first-stage problem object from `inst`.
+"""
 function FirstStageProblem(
     inst::VSPInstance;
     silent = true,
@@ -129,11 +181,34 @@ function FirstStageProblem(
     return FirstStageProblem(inst, model, x, q)
 end
 
+"""
+    SecondStageProblem
+
+Model for the Bender's decomposition second-stage problem of the Vehicle Scheduling
+Problem (VSP) with propagated delays.
+
+# Fields
+- `model::JuMP.Model`: JuMP model for optimization.
+- `p::Vector{VariableRef}`: references to propagated delay dual variables in the `model`.
+"""
 struct SecondStageProblem
     model::JuMP.Model # VSP model
     p::Vector{VariableRef} # second-stage dual variables
 end
 
+"""
+    SecondStageProblem(
+        x::Matrix{Float64},
+        inst::VSPInstance[,
+        silent = true,
+        outputFlag = 0,
+        timeLimit = 60
+        ]
+    )
+
+Create a second-stage problem object with arc decision variables, `x`, from
+the FirstStageProblem and `inst`.
+"""
 function SecondStageProblem(
     x::Matrix{Float64},
     inst::VSPInstance;
@@ -162,8 +237,12 @@ function SecondStageProblem(
     return SecondStageProblem(model, p)
 end
 
-# function to generate an optimal secon stage problem solution
-# this is based on finding the maximum contiguous sum throughout the objective vector
+"""
+    get_p(x::Matrix{Float64}, obj::Vector{Float64}[, tol::Float64 = 1e-6])
+
+Calculate optimal dual variables for the Bender's decomposition second-stage problem
+of the Vehcile Scheduling Problem (VSP) with propagated delays.
+"""
 function get_p(x::Matrix{Float64}, obj::Vector{Float64}; tol::Float64 = 1e-6)
     n = size(x, 1)
     x = convert(Matrix{Bool}, round.(x))
@@ -202,10 +281,16 @@ function get_p(x::Matrix{Float64}, obj::Vector{Float64}; tol::Float64 = 1e-6)
     return p
 end
 
+# to measure efficiency between custom algorithm and LP
 global lp_callback_runtimes = []
 global get_p_callback_runtimes = []
 
-# adds the callback method to implement Bender's decomposition lazily
+"""
+    add_benders_callback!(fs::FirstStageProblem[, silent::Bool = true])
+
+At every integer solution of `fs`, add any violated optimality constraints from
+the second-stage problem.
+"""
 function add_benders_callback!(fs::FirstStageProblem; silent::Bool = true)
 
     # See Benders progress
@@ -223,9 +308,11 @@ function add_benders_callback!(fs::FirstStageProblem; silent::Bool = true)
         n = fs.inst.n
         this_x = callback_value.(cb_data, fs.x)
         this_q = callback_value(cb_data, fs.q)
+        # solving via LP - can comment from here ...
         ss = SecondStageProblem(this_x, fs.inst)
         optimize!(ss.model)
         push!(lp_callback_runtimes, solve_time(ss.model))
+        # ... to here to only use algorithmic solution
         this_obj = [this_x[2:n, i]' * (fs.inst.l[2:n] .- fs.inst.B[2:n, i]) for i ∈ 2:n]
         this_p = get_p(this_x, this_obj)
         push!(get_p_callback_runtimes, @elapsed get_p(this_x, this_obj))
@@ -245,13 +332,33 @@ function add_benders_callback!(fs::FirstStageProblem; silent::Bool = true)
 
 end
 	
+"""
+    MCFModel
+
+Model for the Vehicle Scheduling Problem (VSP).
+
+# Fields
+- `inst::VSPInstance`: VSP instance on which the model will be applied.
+- `model::JuMP.Model`: JuMP model for optimization.
+- `x::Matrix{VariableRef}`: references to arc decision variables in the `model`.
+"""
 struct MCFModel
     inst::VSPInstance # VSP instance
     model::JuMP.Model # min cost flow model
     x::Matrix{VariableRef} # decision variable matrix
 end
 
-# basic min cost network flow model for intermediate solutions during subgradient algorithm
+"""
+    MCFModel(
+        inst::VSPInstance[,
+        silent = true,
+        outputFlag = 0,
+        timeLimit = 60
+        ]
+    )
+
+Create a min-cost flow model object from `inst`.
+"""
 function MCFModel(
     inst::VSPInstance;
     silent = true,
@@ -280,6 +387,7 @@ function MCFModel(
     return MCFModel(inst, model, x)
 end
 
+# (NOT USING)
 struct DelayModel
     model::JuMP.Model # model to obtain trip delays
     s::Vector{VariableRef} # decision variable matrix

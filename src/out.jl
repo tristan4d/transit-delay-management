@@ -3,6 +3,20 @@ using GraphPlot
 using JuMP
 using Random
 
+"""
+    VSPSolution
+
+Solution of `mod`.
+
+# Fields
+- `numVehicles::Union{Float64, Int}`: number of vehicles required in the solution.
+- `isInt::Bool`: whether the arc decision variables, `x`, are integer or not.
+- `x::Union{Matrix{Float64}, Matrix{Int}}`: arc decision variables.
+- `s::Vector{Float64}`: propagated delay variables.
+- `objective_value::Union{Float64, Vector{Float64}}`: optimal objective value.
+- `solve_time::Float64`: computation time for the optimization.
+- `mod::Union{VSPModel, FirstStageProblem}`: the optimized model.
+"""
 struct VSPSolution
     numVehicles::Union{Float64, Int} # number of vehicles used
 	isInt::Bool # whether the solution is integer or not
@@ -13,6 +27,11 @@ struct VSPSolution
     mod::Union{VSPModel, FirstStageProblem}
 end
 
+"""
+    solve!(mod::VSPModel)
+
+Optimize the VSP model, `mod`.
+"""
 function solve!(mod::VSPModel)
     optimize!(mod.model)
     numTrips = mod.inst.n - 1
@@ -39,6 +58,11 @@ function solve!(mod::VSPModel)
     )
 end
 
+"""
+    solve!(mod::FirstStageProblem)
+
+Optimize the first-stage problem model, `mod`.
+"""
 function solve!(mod::FirstStageProblem)
     optimize!(mod.model)
     numTrips = mod.inst.n - 1
@@ -66,6 +90,18 @@ function solve!(mod::FirstStageProblem)
     )
 end
 
+"""
+    MCFSolution
+
+Solution of `mod`.
+
+# Fields
+- `numVehicles::Union{Float64, Int}`: number of vehicles required in the solution.
+- `x::Union{Matrix{Float64}, Matrix{Int}}`: arc decision variables.
+- `objective_value::Union{Float64, Vector{Float64}}`: optimal objective value.
+- `solve_time::Float64`: computation time for the optimization.
+- `mod::Union{VSPModel, FirstStageProblem}`: the optimized model.
+"""
 struct MCFSolution
     numVehicles::Union{Float64, Int} # number of vehicles used
 	x::Union{Matrix{Float64}, Matrix{Int}} # link decision values
@@ -74,6 +110,11 @@ struct MCFSolution
     mod::MCFModel
 end
 
+"""
+    solve!(mod::MCFModel)
+
+Optimize the min-cost flow model, `mod`.
+"""
 function solve!(mod::MCFModel)
     optimize!(mod.model)
     x = value.(mod.x)
@@ -88,6 +129,7 @@ function solve!(mod::MCFModel)
     )
 end
 
+# (NOT USING)
 function solve!(mod::DelayModel)
     optimize!(mod.model)
     s = value.(mod.s)
@@ -95,6 +137,11 @@ function solve!(mod::DelayModel)
     return s
 end
 
+"""
+    plotVSP(sol::Union{VSPSolution, MCFSolution})
+
+Plot `sol` as a graph.
+"""
 function plotVSP(sol::Union{VSPSolution, MCFSolution})
     g = SimpleDiGraph(sol.x)
     n = nv(g)
@@ -233,6 +280,11 @@ function plotVSP_time(sol::Union{VSPSolution, MCFSolution})
     return time_plot
 end
 
+"""
+    plotVSP(inst::VSPInstance)
+
+Plot `inst` as a graph.
+"""
 function plotVSP(inst::VSPInstance)
     g = SimpleDiGraph(inst.G)
     n = nv(g)
@@ -258,7 +310,12 @@ function plotVSP(inst::VSPInstance)
     )
 end
 
-# function to generate vehicle blocks from a 0-1 decision matrix
+"""
+    generate_blocks(x::Matrix{Bool})
+
+Determine the vehicle blocks (schedules) for each vehicle in the solution associated
+with `x`.
+"""
 function generate_blocks(x::Matrix{Bool})
     pull_trips = findall(x[1, :])
     schedules = []
