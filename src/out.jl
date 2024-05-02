@@ -329,6 +329,7 @@ function generate_blocks(x::Matrix{Bool})
             push!(schedule, next_trip)
         end
 
+        # '.-1' to correct for the depot
         push!(schedules, schedule .- 1)
     end
 
