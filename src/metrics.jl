@@ -1,30 +1,41 @@
 using DataFrames
 
-function solutionStats(sol::Union{VSPSolution, MCFSolution})
+struct SolutionStats
+    sol::Union{VSPSolution, MCFSolution}
+    metrics::DataFrame
+end
+
+function SolutionStats(sol::Union{VSPSolution, MCFSolution})
     x = convert(Matrix{Bool}, round.(sol.x))
     schedules = generate_blocks(x)
+    l = sol.mod.inst.l
+    B = sol.mod.inst.B
+    propagated_delays = feasibleDelays(sol.x, l, B)[2:end]
     trips = sol.mod.inst.trips
     metrics = DataFrame(
         [
             Float64[],
             Int[],
+            Float64[],
             Float64[]
         ],
         [
             "duration",
             "num_trips",
-            "in_service"
+            "utilization",
+            "propagated_delay"
         ]
     )
 
     for schedule in schedules
         duration = getBlockLength(schedule, trips)
         num_trips = length(schedule)
-        in_service = 1 - notInServiceLength(schedule, trips) / duration
-        push!(metrics, [duration, num_trips, in_service])
+        utilization = 1 - notInServiceLength(schedule, trips) / duration
+        propagated_delay = sum(propagated_delays[schedule])
+        push!(metrics, [duration, num_trips, utilization, propagated_delay])
     end
     
-    return metrics
+    return SolutionStats(sol, metrics)
 end
 
 function getBlockLength(s::Vector{Int}, trips::DataFrame)

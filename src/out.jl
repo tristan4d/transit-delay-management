@@ -188,49 +188,14 @@ function plotVSP(sol::Union{VSPSolution, MCFSolution})
     )
 end
 
-# function plotVSP_time(sol::Union{VSPSolution, MCFSolution})
-#     trips = sol.mod.inst.trips
-#     x = convert(Matrix{Bool}, round.(sol.x))
-#     schedules = generate_blocks(x)
-#     time_plot = plot(;legend=:topright)
-#     cmap = range(colorant"red", stop=colorant"blue", length=Int(sol.numVehicles))
-#     yflip!(true)
+"""
+    plotVSP_time(sol::Union{VSPSolution, MCFSolution})
 
-#     for (s, schedule) ∈ enumerate(schedules)
-#         this_schedule = schedule .- 1
-#         xs = []
-#         ys = []
-#         dhxs = []
-#         dhys = []
-#         duration = 0.0
-#         for (i, trip) ∈ enumerate(this_schedule)
-#             push!(xs, duration, duration+trips[trip, :stop_time]-trips[trip, :start_time], NaN)
-#             push!(ys, trips[trip, :start_time], trips[trip, :start_time], NaN)
+Plot the vehicle schedules in `sol` over time.
 
-#             try
-#                 last_dur = duration+trips[trip, :stop_time]-trips[trip, :start_time]
-#                 duration = trips[this_schedule[i+1], :start_time]-trips[this_schedule[1], :start_time]
-#                 push!(dhxs, last_dur, duration, NaN)
-#                 push!(dhys, trips[trip, :start_time], trips[this_schedule[i+1], :start_time], NaN)
-#             catch
-#                 last_dur = duration+trips[trip, :stop_time]-trips[trip, :start_time]
-#                 push!(dhxs, last_dur, last_dur)
-#                 push!(dhys, trips[trip, :start_time], maximum(trips[:, :stop_time]))
-#             end
-#         end
-#         plot!(
-#             xs,
-#             ys;
-#             lc = cmap[s],
-#             lw = 2,
-#             label = "vehicle $(s)"
-#         )
-#         plot!(dhxs, dhys; ls=:dash, lc=:black, la=0.25, label=nothing)
-#     end
-
-#     return time_plot
-# end
-
+Colors indicate the block in the original GTFS files.  The number indicates the route
+number.
+"""
 function plotVSP_time(sol::Union{VSPSolution, MCFSolution})
     trips = sol.mod.inst.trips
     x = convert(Matrix{Bool}, round.(sol.x))
@@ -238,9 +203,8 @@ function plotVSP_time(sol::Union{VSPSolution, MCFSolution})
     first_trips = [schedule[1] for schedule in schedules]
     schedules = schedules[sortperm(trips[first_trips, :start_time])]
     time_plot = plot(;legend=false)
-    vehicle_cmap = range(colorant"red", stop=colorant"blue", length=Int(sol.numVehicles))
     blocks = unique(trips[:, :block_id])
-    block_cmap = range(colorant"red", stop=colorant"blue", length=length(blocks))
+    block_cmap = range(colorant"yellow", stop=colorant"blue", length=length(blocks))
     yflip!(true)
 
     counter = 0
@@ -254,16 +218,16 @@ function plotVSP_time(sol::Union{VSPSolution, MCFSolution})
                 [trips[trip, :start_time], trips[trip, :stop_time]],
                 [counter, counter];
                 lc = block_cmap[findfirst(==(trips[trip, :block_id]), blocks)],
-                lw = 2
+                lw = 10
             )
             push!(annot_xs, (trips[trip, :start_time]+trips[trip, :stop_time])/2)
-            push!(annot_ys, counter-0.75)
-            push!(annots, Plots.text("route $(trips[trip, :route_id])", :black, :center, 4))
+            push!(annot_ys, counter-0.25)
+            push!(annots, Plots.text(trips[trip, :route_id], :black, :center, 4))
 
             try
                 plot!(
                     [trips[trip, :stop_time], trips[this_schedule[i+1], :start_time]],
-                    [counter, counter+1];
+                    [counter, counter];
                     ls = :dash,
                     lc = :black,
                     la = 0.25
@@ -271,9 +235,9 @@ function plotVSP_time(sol::Union{VSPSolution, MCFSolution})
             catch
                 nothing
             end
-
-            counter += 1
         end
+
+        counter += 1
         annotate!(annot_xs, annot_ys, annots)
     end
 
