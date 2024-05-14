@@ -1,5 +1,8 @@
 using Graphs
 using GraphPlot
+using Plots
+using Leaflet
+using Colors
 using JuMP
 using Random
 
@@ -208,7 +211,7 @@ function plotVSP_time(sol::Union{VSPSolution, MCFSolution})
     yflip!(true)
 
     counter = 0
-    for (s, schedule) ∈ enumerate(schedules)
+    for schedule ∈ schedules
         this_schedule = schedule
         annot_xs = []
         annot_ys = []
@@ -241,6 +244,7 @@ function plotVSP_time(sol::Union{VSPSolution, MCFSolution})
         annotate!(annot_xs, annot_ys, annots)
     end
 
+    ylims!(-1, counter)
     return time_plot
 end
 
@@ -272,6 +276,27 @@ function plotVSP(inst::VSPInstance)
         nodelabeldist = 1,
         nodelabelangleoffset = 3*pi/2,
     )
+end
+
+function plotVSP_map(metrics::DataFrame)
+    layers = Leaflet.Layer[]
+    block_cmap = range(colorant"red", stop=colorant"blue", length=size(metrics, 1))
+    for (i, geom) in enumerate(metrics.geometry)
+        color = "#" * hex(block_cmap[i])
+        for linestring in geom
+            push!(layers, Leaflet.Layer(linestring; color=color))
+        end
+    end
+
+    provider = Leaflet.CARTO()
+    m = Leaflet.Map(;
+        layers = layers,
+        provider = provider,
+        zoom = 12,
+        center = [49.175, -123.95]
+    )
+
+    return m
 end
 
 """

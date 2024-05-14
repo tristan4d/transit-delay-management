@@ -20,6 +20,9 @@ end
     loadGTFS(path::String)
 
 Load and transform GTFS data located at `path` with respect to the current directory.
+
+Returns two DataFrames.  The first include trip-level information while the second
+includes shape-level information.
 """
 function loadGTFS(path::String)
     # load dataframes for gtfs files
@@ -28,10 +31,10 @@ function loadGTFS(path::String)
     routes = CSV.read(joinpath(folder, "routes.txt"), DataFrames.DataFrame)
     times = CSV.read(joinpath(folder, "stop_times.txt"), DataFrames.DataFrame)
     shapes = CSV.read(joinpath(folder, "shapes.txt"), DataFrames.DataFrame)
-    calendar = CSV.read(joinpath(folder, "calendar_dates.txt"), DataFrames.DataFrame)
+    # calendar = CSV.read(joinpath(folder, "calendar_dates.txt"), DataFrames.DataFrame)
 
     # create trip dataframe ordered by block_id and start_time
-    df = @chain trips begin
+    trips_df = @chain trips begin
         @subset (:service_id .== 2015) # manual filter for Tuesday
         @transform (@byrow :route_id =
             routes[routes.route_id.==:route_id, :].route_short_name[1])
@@ -58,6 +61,7 @@ function loadGTFS(path::String)
                 :block_id,
                 :route_id,
                 :trip_id,
+                :shape_id,
                 :distance,
                 :start_time,
                 :stop_time,
@@ -70,7 +74,28 @@ function loadGTFS(path::String)
         sort(_, [:block_id, :start_time])
     end
 
-    return df
+    grouped_shapes = groupby(shapes, :shape_id)
+    shape_pts = Vector{Vector{Tuple{Float64, Float64}}}()
+    shape_dist_traveled = Float64[]
+
+    for shape in grouped_shapes
+        # extract shape_pt_lat and shape_pt_lon columns as tuples
+        lat_lon_tuples = [(row.shape_pt_lon, row.shape_pt_lat) for row in eachrow(shape)]
+        
+        # extract shape_dist_traveled
+        dist_traveled = sum(shape.shape_dist_traveled)
+        
+        push!(shape_pts, lat_lon_tuples)
+        push!(shape_dist_traveled, dist_traveled)
+    end
+
+    shapes_df = DataFrame(
+        shape_id = unique(shapes.shape_id),
+        shape_pts = shape_pts,
+        shape_dist_traveled = shape_dist_traveled
+    )
+
+    return trips_df, shapes_df
 end
 
 """

@@ -77,10 +77,8 @@ function VSPModel(
         @variable(model, x[1:n, 1:n] >= 0)
     end
     # variable for propagated delay at trip i
-    # @variable(model, s[1:n] >= 0)
     @variable(model, s[1:n-1] >= 0)
     # nonlinear variable x_ij * s_j
-    # @variable(model, phi[1:n, 1:n] >= 0)
     @variable(model, ϕ[1:n-1, 1:n-1] >= 0)
     # warm start with MCF model solution
     if warmStart
@@ -93,12 +91,8 @@ function VSPModel(
     # force non-existant links to 0
     @constraint(model, [i = 1:n, j = 1:n; !G[i, j]], x[i, j] == 0)
     # variable constraints
-    # @constraint(model, [i = 1:n], s[i] >= sum(phi[:, i] .+ x[:, i] .* (l .- B[:, i])))
     @constraint(model, [i = 1:n-1], s[i] >= sum(ϕ[:, i] .+ x[2:end, i+1] .* (l[2:end] .- B[2:end, i+1])))
     # McCormick constraints for nonlinear variable
-    # @constraint(model, [i = 1:n, j = 1:n], phi[i, j] <= M * x[i, j])
-    # @constraint(model, [i = 1:n, j = 1:n], phi[i, j] <= s[i])
-    # @constraint(model, [i = 1:n, j = 1:n], phi[i, j] >= s[i] - M * (1 - x[i, j]))
     @constraint(model, [i = 1:n-1, j = 1:n-1], ϕ[i, j] <= M * x[i+1, j+1])
     @constraint(model, [i = 1:n-1, j = 1:n-1], ϕ[i, j] <= s[i])
     @constraint(model, [i = 1:n-1, j = 1:n-1], ϕ[i, j] >= s[i] - M * (1 - x[i+1, j+1]))

@@ -189,40 +189,6 @@ function lagrangianDualObjective(
     )
 end
 
-"""
-    feasibleDelays(
-        x::Matrix{Float64},
-        l::Vector{Float64},
-        B::Matrix{Float64}
-    )
-
-Calculate the propagated delay at each trip given arc decisions `x`, expected delays
-`l`, and buffer times `B`.
-"""
-function feasibleDelays(
-    x::Matrix{Float64},
-    l::Vector{Float64},
-    B::Matrix{Float64}
-)
-    n = size(x, 1)
-    s = zeros(Float64, n)
-    delays = ones(Float64, n)
-    iterations = 0
-
-    while any(delays .> eps())
-        if iterations > 100
-            break
-        end
-
-        delays = [x[:, i]' * (s .+ l .- B[:, i]) - s[i] for i ∈ 1:n]
-
-        iterations += 1
-        s = max.(0, s .+ delays)
-    end
-
-    return s
-end
-
 function αNew(
     UB::Float64,
     LB::Float64,
