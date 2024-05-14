@@ -15,7 +15,7 @@ Solution of `mod`.
 - `numVehicles::Union{Float64, Int}`: number of vehicles required in the solution.
 - `isInt::Bool`: whether the arc decision variables, `x`, are integer or not.
 - `x::Union{Matrix{Float64}, Matrix{Int}}`: arc decision variables.
-- `s::Vector{Float64}`: propagated delay variables.
+- `s::Matrix{Float64}`: propagated delay variables.
 - `objective_value::Union{Float64, Vector{Float64}}`: optimal objective value.
 - `solve_time::Float64`: computation time for the optimization.
 - `mod::Union{VSPModel, FirstStageProblem}`: the optimized model.
@@ -24,7 +24,7 @@ struct VSPSolution
     numVehicles::Union{Float64, Int} # number of vehicles used
 	isInt::Bool # whether the solution is integer or not
 	x::Union{Matrix{Float64}, Matrix{Int}} # link decision values
-    s::Vector{Float64} # propagated trip delays
+    s::Matrix{Float64} # propagated trip delays
     objective_value::Union{Float64, Vector{Float64}}
     solve_time::Float64
     mod::Union{VSPModel, FirstStageProblem}
@@ -203,14 +203,12 @@ function plotVSP_time(sol::Union{VSPSolution, MCFSolution})
     trips = sol.mod.inst.trips
     x = convert(Matrix{Bool}, round.(sol.x))
     schedules = generate_blocks(x)
-    first_trips = [schedule[1] for schedule in schedules]
-    schedules = schedules[sortperm(trips[first_trips, :start_time])]
     time_plot = plot(;legend=false)
     blocks = unique(trips[:, :block_id])
     block_cmap = range(colorant"yellow", stop=colorant"blue", length=length(blocks))
     yflip!(true)
 
-    counter = 0
+    counter = 1
     for schedule ∈ schedules
         this_schedule = schedule
         annot_xs = []
@@ -244,7 +242,7 @@ function plotVSP_time(sol::Union{VSPSolution, MCFSolution})
         annotate!(annot_xs, annot_ys, annots)
     end
 
-    ylims!(-1, counter)
+    ylims!(0, counter)
     return time_plot
 end
 

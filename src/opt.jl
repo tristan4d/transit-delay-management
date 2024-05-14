@@ -3,6 +3,7 @@ using JuMP
 using LinearAlgebra
 using MultiObjectiveAlgorithms
 MOA = MultiObjectiveAlgorithms
+using Random
 
 gurobi_env = Gurobi.Env()
 	
@@ -14,19 +15,23 @@ Model for the Vehicle Scheduling Problem (VSP) with propagated delays.
 # Fields
 - `inst::VSPInstance`: VSP instance on which the model will be applied.
 - `model::JuMP.Model`: JuMP model for optimization.
+- `L::Matrix{Float64}`: primary delays for each trip and scenario
 - `x::Matrix{VariableRef}`: references to arc decision variables in the `model`.
-- `s::Vector{VariableRef}`: references to the propagated delay variables in the `model`.
+- `s::Matrix{VariableRef}`: references to the propagated delay variables in the `model`.
 """
 struct VSPModel
     inst::VSPInstance # VSP instance
     model::JuMP.Model # VSP model
+    L::Matrix{Float64} # primary trip delays for each scenario
     x::Matrix{VariableRef} # decision variable matrix
-    s::Vector{VariableRef} # propagated delay variable vector
+    s::Matrix{VariableRef} # propagated delay variable matrix
 end
 
 """
     VSPModel(
         inst::VSPInstance[,
+        numScenarios = 100,
+        randomSeed = 1,
         warmStart = false,
         isInt = false,
         multiObj = false,
@@ -38,12 +43,15 @@ end
 
 Create a VSP model object from `inst`.
 
-`warmStart` will initialize model variables with the min-cost flow solution.  `isInt`
+`numScenarios` dictates how many delay scenarios to consider.  `randomSeed` to determine
+randomness of trip delays.  `warmStart` currently does nothing.  `isInt`
 enforces if arc decision variables should be integer or not.  `multiObj` enforces
 whether the model should apply ϵ-constrained optimization on the delay and cost objectives.
 """
 function VSPModel(
     inst::VSPInstance;
+    numScenarios = 100,
+    randomSeed = 1,
     warmStart = false,
     isInt = false,
     multiObj = false,
@@ -64,11 +72,12 @@ function VSPModel(
     set_attribute(model, "TimeLimit", timeLimit)
     n = inst.n
     M = inst.M
-    l = inst.l
     C = inst.C
     B = inst.B
     G = inst.G
-    α = sum(inst.l)
+    Random.seed!(randomSeed)
+    L = hcat(rand.(inst.l, numScenarios)...)'
+    L = vcat(zeros(Float64, 1, numScenarios), L)
 
     # decision variable for arc i -> j
     if isInt
@@ -77,39 +86,42 @@ function VSPModel(
         @variable(model, x[1:n, 1:n] >= 0)
     end
     # variable for propagated delay at trip i
-    @variable(model, s[1:n-1] >= 0)
+    @variable(model, s[1:n-1, 1:numScenarios] >= 0)
     # nonlinear variable x_ij * s_j
-    @variable(model, ϕ[1:n-1, 1:n-1] >= 0)
+    @variable(model, ϕ[1:n-1, 1:n-1, 1:numScenarios] >= 0)
     # warm start with MCF model solution
-    if warmStart
-        mcf_model = MCFModel(inst)
-        mcf_sol = solve!(mcf_model)
-        set_start_value.(x, mcf_sol.x)
-        set_start_value.(s, feasibleDelays(mcf_sol.x, l, B)[2:end])
-        set_start_value.(ϕ, mcf_sol.x[2:end, 2:end] .* (feasibleDelays(mcf_sol.x, l, B)[2:end] * ones(n-1)'))
-    end
+    # if warmStart
+    #     mcf_model = MCFModel(inst)
+    #     mcf_sol = solve!(mcf_model)
+    #     set_start_value.(x, mcf_sol.x)
+    #     s_start = feasibleDelays(mcf_sol.x, l, B)[2:end] * ones(numScenarios)'
+    #     set_start_value.(s, s_start)
+    #     ϕ_start = mcf_sol.x[2:end, 2:end] .* (feasibleDelays(mcf_sol.x, l, B)[2:end] * ones(n-1)')
+    #     ϕ_start = repeat(reshape(ϕ_start, 1, n-1, n-1), 1, 1, numScenarios)
+    #     set_start_value.(ϕ, ϕ_start)
+    # end
     # force non-existant links to 0
     @constraint(model, [i = 1:n, j = 1:n; !G[i, j]], x[i, j] == 0)
     # variable constraints
-    @constraint(model, [i = 1:n-1], s[i] >= sum(ϕ[:, i] .+ x[2:end, i+1] .* (l[2:end] .- B[2:end, i+1])))
+    @constraint(model, [i = 1:n-1, j = 1:numScenarios], s[i, j] >= sum(ϕ[:, i, j] .+ x[2:end, i+1] .* (L[2:end, j] .- B[2:end, i+1])))
     # McCormick constraints for nonlinear variable
-    @constraint(model, [i = 1:n-1, j = 1:n-1], ϕ[i, j] <= M * x[i+1, j+1])
-    @constraint(model, [i = 1:n-1, j = 1:n-1], ϕ[i, j] <= s[i])
-    @constraint(model, [i = 1:n-1, j = 1:n-1], ϕ[i, j] >= s[i] - M * (1 - x[i+1, j+1]))
+    @constraint(model, [i = 1:n-1, j = 1:n-1, k = 1:numScenarios], ϕ[i, j, k] <= M * x[i+1, j+1])
+    @constraint(model, [i = 1:n-1, j = 1:n-1, k = 1:numScenarios], ϕ[i, j, k] <= s[i, k])
+    @constraint(model, [i = 1:n-1, j = 1:n-1, k = 1:numScenarios], ϕ[i, j, k] >= s[i, k] - M * (1 - x[i+1, j+1]))
     # flow constraint
     @constraint(model, [i = 1:n], sum(x[i, :]) - sum(x[:, i]) == 0)
     # require each trip is completed
     @constraint(model, [i = 2:n], sum(x[:, i]) == 1)
     # minimize total propagated delay and link costs
-    @expression(model, delay_expr, sum(s))
+    @expression(model, delay_expr, sum(s) / numScenarios)
     @expression(model, cost_expr, sum(C .* x))
     if multiObj
         @objective(model, Min, [delay_expr, cost_expr])
     else
-        @objective(model, Min, α * delay_expr + cost_expr)
+        @objective(model, Min, M * delay_expr + cost_expr)
     end
 
-    return VSPModel(inst, model, x, s)
+    return VSPModel(inst, model, L, x, s)
 end
 
 """

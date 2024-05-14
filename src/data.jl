@@ -1,5 +1,6 @@
 using DataFrames
 using Distances
+using Distributions
 using Graphs
 using Random
 
@@ -11,7 +12,7 @@ An instance of the Vehicle Scheduling Problem (VSP).
 # Fields
 - `n::Int`: the number of trips in the network plus one, representing the depot.
 - `M::Float64`: maximum possible value for propagated delay of any trip.
-- `l::Vector{Float64}`: expected delays for each trip.
+- `l::Vector{Distribution}`: normal distribution for expected delays across each trip.
 - `C::Matrix{Float64}`: cost for using arc (i, j) in the VSP network.
 - `B::Matrix{Float64}`: buffer time on arc (i, j) in the VSP network.
 - `G::Matrix{Bool}`: 1 if arc (i, j) is usable in the VSP network, 0 otherwise.
@@ -20,7 +21,7 @@ An instance of the Vehicle Scheduling Problem (VSP).
 struct VSPInstance
 	n::Int # number of trips + depot
 	M::Float64 # big-M constraint variable for propagated delay
-	l::Vector{Float64} # expected delay for all trips
+	l::Vector{Distribution} # normal distributions for expected delay for all trips
 	C::Matrix{Float64} # adjacency-cost lists for all trips
 	B::Matrix{Float64} # buffer time between all trips
 	G::Matrix{Bool} # connections between trips (G[i,j] = 1 if arc i -> j in G)
@@ -30,7 +31,7 @@ end
 """
 	VSPInstance(
 		trips::DataFrame[,
-		l::Union{Vector{Float64}, Nothing} = nothing,
+		l::Union{Matrix{Float64}, Nothing} = nothing,
 		averageSpeed::Float64 = 30.0,
 		randomSeed = 1
 		]
@@ -38,30 +39,30 @@ end
 
 Create a VSPInstance object from the `trips` DataFrame.
 
-Expected trip delays may be specified by `l`.  Possible deadheads are determined
+Expected trip delays may be specified by `l` which has mean delays in the first column
+and standard deviations in the second.  Possible deadheads are determined
 by haversine distance and `averageSpeed`.
 """
 function VSPInstance(
 	trips::DataFrame;
-    l::Union{Vector{Float64}, Nothing} = nothing,
+    l::Union{Matrix{Float64}, Nothing} = nothing, # [μ, σ]
 	averageSpeed::Float64 = 30.0,
 	randomSeed = 1,
 )
 	Random.seed!(randomSeed)
 	n = size(trips, 1) + 1
 	if isnothing(l)
-        l = zeros(Float64, n)
-        l[1] = 0
-        # generate random delays from 0-100% of trip length
-        l[2:end] .= rand(0:100, n-1) ./ 100 .* (trips[:, :stop_time] .- trips[:, :start_time])
-        # l[2:end] .= rand(0:30, n-1) ./ 100 .* (trips[:, :stop_time] .- trips[:, :start_time])
+        μ = (trips[:, :stop_time] .- trips[:, :start_time]) * 0.25
+        σ = μ * 0.1 / 0.25
+        # generate normal distributions for each trip
+		l = truncated.(Normal.(μ, σ), 0.0, 4*μ)
+	else
+		l = truncated.(Normal.(l[:, 1], l[:, 2]), 0.0, 4*μ)
     end
-    M = sum(l)
 	C = zeros(Float64, n, n)
     C[1, 2:end] .= 100 # cost per vehicle
 	B = zeros(Float64, n, n)
 	G = zeros(Bool, n, n)
-    B[2:end, 1] .= M # *infinite* buffer time when returning to depot
 	G[1, 2:end] .= 1 # add link from depot to each trip
 	G[2:end, 1] .= 1 # add link from each trip to depot
 
@@ -83,10 +84,10 @@ function VSPInstance(
 	end
 
 	# using longest path to tighten big-M
-	# g = SimpleDiGraph(G[2:end, 2:end])
-	# m = -1*minimum(Graphs.dijkstra_shortest_paths(g, findall(G[1,2:end]), -1*ones(Int, n-1, n-1)).dists)
-	# M = sum(sort(l, rev=true)[1:m+1])
-    # B[2:end, 1] .= M # *infinite* buffer time when returning to depot
+	g = SimpleDiGraph(G[2:end, 2:end])
+	m = -1*minimum(Graphs.dijkstra_shortest_paths(g, findall(G[1,2:end]), -1*ones(Int, n-1, n-1)).dists)
+	M = sum(sort(maximum.(l), rev=true)[1:m+1])
+    B[2:end, 1] .= M # *infinite* buffer time when returning to depot
 
 	return VSPInstance(n, M, l, C, B, G, trips)
 end

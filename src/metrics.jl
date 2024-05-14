@@ -1,5 +1,6 @@
 using DataFrames
 using GeoInterface
+using Statistics
 
 struct SolutionStats
     sol::Union{VSPSolution, MCFSolution}
@@ -9,9 +10,8 @@ end
 function getSolutionStats(sol::Union{VSPSolution, MCFSolution}, shapes::DataFrame)
     x = convert(Matrix{Bool}, round.(sol.x))
     schedules = generate_blocks(x)
-    l = sol.mod.inst.l
     B = sol.mod.inst.B
-    propagated_delays = feasibleDelays(sol.x, l, B)[2:end]
+    propagated_delays = sol.s # THIS DOES NOT WORK FOR MCFSolution YET
     trips = sol.mod.inst.trips
     metrics = DataFrame(
         [
@@ -36,7 +36,7 @@ function getSolutionStats(sol::Union{VSPSolution, MCFSolution}, shapes::DataFram
         duration = getBlockLength(schedule, trips)
         num_trips = length(schedule)
         utilization = 1 - notInServiceLength(schedule, trips) / duration
-        propagated_delay = sum(propagated_delays[schedule])
+        propagated_delay = sum(mean(propagated_delays[schedule, :], dims=2))
         distance, geometry = getGeometry(schedule, trips, shapes)
         push!(metrics, [
             duration,
