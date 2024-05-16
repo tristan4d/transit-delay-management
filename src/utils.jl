@@ -1,4 +1,5 @@
 using CSV
+using Dates
 using DataFrames
 using DataFramesMeta
 using Distributions
@@ -14,6 +15,18 @@ Compute the hour as a Float32 from `s`.
 function string2time(s::String15)
     h, m, s = parse.(Float32, split(s, ":"))
     return h + m / 60 + s / 3600
+end
+
+"""
+    string2time(dt::Dates.Time)
+
+Compute the hour as a Float32 from the datetime object `dt`.
+"""
+function string2time(dt::Dates.Time)
+    h = hour(dt)
+    m = minute(dt)
+    s = second(dt)
+    return Float32(h + m / 60 + s / 3600)
 end
 
 """
@@ -35,7 +48,8 @@ function loadGTFS(path::String)
 
     # create trip dataframe ordered by block_id and start_time
     trips_df = @chain trips begin
-        @subset (:service_id .== 2015) # manual filter for Tuesday
+        @subset (:service_id .== 2015) # manual filter for Nanaimo
+        # @subset (:service_id .== 2086) # manual filter for Cranbrook
         @transform (@byrow :route_id =
             routes[routes.route_id.==:route_id, :].route_short_name[1])
         @transform(
@@ -99,13 +113,40 @@ function loadGTFS(path::String)
 end
 
 """
-    subsetGTFS(df::DataFrame, n::Int[, randomSeed = 1])
+    subsetGTFS(
+        df::DataFrame,
+        n::Int[,
+        routes = nothing,
+        start_time = nothing,
+        stop_time = nothing,
+        randomSeed = 1]
+    )
 
 Selects a random subset of trips from `df` of size `n`.
-"""
-function subsetGTFS(df::DataFrame, n::Int; randomSeed = 1)
-    Random.seed!(randomSeed)
-    idx = sample(1:size(df, 1), n, replace = false)
 
-    return df[idx, :]
+`routes` may be used to select a specific subset of routes.  `start_time` and 
+`stop_time` can be used to specify a time frame.
+"""
+function subsetGTFS(
+    df::DataFrame,
+    n::Int;
+    routes = nothing,
+    start_time = nothing,
+    stop_time = nothing,
+    randomSeed = 1
+)
+    subset = df
+    if !isnothing(routes)
+        subset = subset[[in(route, routes) for route in subset.route_id], :]
+    end
+    if !isnothing(start_time)
+        subset = subset[[start >= start_time for start in subset.start_time], :]
+    end
+    if !isnothing(stop_time)
+        subset = subset[[stop <= stop_time for stop in subset.stop_time], :]
+    end
+    Random.seed!(randomSeed)
+    idx = sample(1:size(subset, 1), n, replace = false)
+
+    return subset[idx, :]
 end

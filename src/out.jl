@@ -2,9 +2,11 @@ using Graphs
 using GraphPlot
 using Plots
 using Leaflet
+using GeoInterface
 using Colors
 using JuMP
 using Random
+using Statistics
 
 """
     VSPSolution
@@ -15,7 +17,8 @@ Solution of `mod`.
 - `numVehicles::Union{Float64, Int}`: number of vehicles required in the solution.
 - `isInt::Bool`: whether the arc decision variables, `x`, are integer or not.
 - `x::Union{Matrix{Float64}, Matrix{Int}}`: arc decision variables.
-- `s::Matrix{Float64}`: propagated delay variables.
+- `s::Vector{Float64}`: mean trip delays across all scenarios.
+- `s_err::Vector{Float64}`: standard deviation of trip delays across all scenarios.
 - `objective_value::Union{Float64, Vector{Float64}}`: optimal objective value.
 - `solve_time::Float64`: computation time for the optimization.
 - `mod::Union{VSPModel, FirstStageProblem}`: the optimized model.
@@ -24,7 +27,8 @@ struct VSPSolution
     numVehicles::Union{Float64, Int} # number of vehicles used
 	isInt::Bool # whether the solution is integer or not
 	x::Union{Matrix{Float64}, Matrix{Int}} # link decision values
-    s::Matrix{Float64} # propagated trip delays
+    s::Vector{Float64} # propagated trip delays
+    s_err::Vector{Float64} # standard deviation of trip delays
     objective_value::Union{Float64, Vector{Float64}}
     solve_time::Float64
     mod::Union{VSPModel, FirstStageProblem}
@@ -54,7 +58,8 @@ function solve!(mod::VSPModel)
         numVehicles,
         all(isinteger.(x)),
         x,
-        s,
+        vec(mean(s, dims=2)),
+        vec(std(s, dims=2)),
         objective_value(mod.model),
         solve_time(mod.model),
         mod
@@ -158,8 +163,8 @@ function plotVSP(sol::Union{VSPSolution, MCFSolution})
 
     triplabels = [
         """
-        $(i): $(round(sol.mod.inst.trips[i, :start_time]; digits = 1)) -  $(round(sol.mod.inst.trips[i, :stop_time]; digits = 1)) \n
-        l = $(round(sol.mod.inst.l[i+1]; digits = 1)) \n
+        $(i): $(round(sol.mod.inst.trips[i, :start_time]; digits=1)) -  $(round(sol.mod.inst.trips[i, :stop_time]; digits=1)) \n
+        l = $(round(mean(sol.mod.inst.l[i]); digits=1)) +/- $(round(std(sol.mod.inst.l[i]); digits=1))\n
         s = $(round(s[i]; digits = 2))
         """
         for i ∈ 1:n-1
@@ -170,8 +175,8 @@ function plotVSP(sol::Union{VSPSolution, MCFSolution})
     nodelabelsize = vcat(2, [1 for _ ∈ 1:n-1])
     edgelabel = [
         """
-        x = $(round(sol.x[src(e), dst(e)]; digits = 1)) \n
-        b = $(round(sol.mod.inst.B[src(e), dst(e)]; digits = 1))
+        x = $(round(sol.x[src(e), dst(e)]; digits=1)) \n
+        b = $(round(sol.mod.inst.B[src(e), dst(e)]; digits=1))
         """
         for (i, e) ∈ enumerate(edges(g))
     ]
@@ -276,22 +281,39 @@ function plotVSP(inst::VSPInstance)
     )
 end
 
-function plotVSP_map(metrics::DataFrame)
+function plotVSP_map(metrics::DataFrame; schedule = nothing)
     layers = Leaflet.Layer[]
-    block_cmap = range(colorant"red", stop=colorant"blue", length=size(metrics, 1))
+    n = size(metrics, 1)
+    # block_cmap = range(colorant"yellow", stop=colorant"blue", length=n)
+    block_cmap = palette(:tab10)
+    lats = []
+    lons = []
     for (i, geom) in enumerate(metrics.geometry)
+        if !isnothing(schedule) && i != schedule
+            continue
+        end
         color = "#" * hex(block_cmap[i])
-        for linestring in geom
-            push!(layers, Leaflet.Layer(linestring; color=color))
+        translation_vector = rand(0:1, 2) / 5000
+        for (j, linestring) in enumerate(geom)
+            coords = GeoInterface.coordinates(linestring)
+            append!(lons, [coord[1] for coord in coords])
+            append!(lats, [coord[2] for coord in coords])
+            translated_linestring = GeoInterface.LineString(map(x -> x + translation_vector, coords))
+            push!(layers, Leaflet.Layer(
+                translated_linestring;
+                color=j%2==0 ? "gray" : color,
+                opacity=j%2==0 ? 0.5 : 1,
+                border_width=isnothing(schedule) ? 2*(n+1-i) : 2
+            ))
         end
     end
 
     provider = Leaflet.CARTO()
     m = Leaflet.Map(;
-        layers = layers,
-        provider = provider,
-        zoom = 12,
-        center = [49.175, -123.95]
+        layers=layers,
+        provider=provider,
+        zoom=12,
+        center=[mean(lats), mean(lons)]
     )
 
     return m

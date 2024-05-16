@@ -7,16 +7,41 @@ struct SolutionStats
     metrics::DataFrame
 end
 
-function getSolutionStats(sol::Union{VSPSolution, MCFSolution}, shapes::DataFrame)
+function getSolutionStats(
+    sol::Union{VSPSolution, MCFSolution},
+    shapes::DataFrame,
+    delays::Union{Matrix{Float64}, Nothing} = nothing
+)
     x = convert(Matrix{Bool}, round.(sol.x))
     schedules = generate_blocks(x)
+    n = sol.mod.inst.n
+    if isnothing(delays)
+        L = sol.mod.L
+        numScenarios = sol.mod.numScenarios
+    else
+        L = delays
+        numScenarios = size(delays, 2)
+    end
     B = sol.mod.inst.B
-    propagated_delays = sol.s # THIS DOES NOT WORK FOR MCFSolution YET
+    propagated_delays = zeros(Float64, n-1)
+    propagated_delay_errs = zeros(Float64, n-1)
+    try
+        propagated_delays = sol.s
+        propagated_delay_errs = sol.s_err
+    catch
+        this_s = zeros(Float64, n, numScenarios)
+        for scenario in 1:numScenarios
+            this_s[:, scenario] = feasibleDelays(sol.x, L[:, scenario], B)
+        end
+        propagated_delays = vec(mean(this_s, dims=2))[2:end]
+        propagated_delay_errs = vec(std(this_s, dims=2))[2:end]
+    end
     trips = sol.mod.inst.trips
     metrics = DataFrame(
         [
             Float64[],
             Int[],
+            Float64[],
             Float64[],
             Float64[],
             Float64[],
@@ -27,6 +52,7 @@ function getSolutionStats(sol::Union{VSPSolution, MCFSolution}, shapes::DataFram
             "num_trips",
             "utilization",
             "propagated_delay",
+            "propagated_delay_err",
             "trip_distance",
             "geometry"
         ]
@@ -36,13 +62,15 @@ function getSolutionStats(sol::Union{VSPSolution, MCFSolution}, shapes::DataFram
         duration = getBlockLength(schedule, trips)
         num_trips = length(schedule)
         utilization = 1 - notInServiceLength(schedule, trips) / duration
-        propagated_delay = sum(mean(propagated_delays[schedule, :], dims=2))
+        propagated_delay = sum(propagated_delays[schedule])
+        propagated_delay_err = sum(propagated_delay_errs[schedule])
         distance, geometry = getGeometry(schedule, trips, shapes)
         push!(metrics, [
             duration,
             num_trips,
             utilization,
             propagated_delay,
+            propagated_delay_err,
             distance,
             geometry
         ])

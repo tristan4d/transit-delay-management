@@ -15,6 +15,7 @@ Model for the Vehicle Scheduling Problem (VSP) with propagated delays.
 # Fields
 - `inst::VSPInstance`: VSP instance on which the model will be applied.
 - `model::JuMP.Model`: JuMP model for optimization.
+- `numScenarios::Int`: number of delay scenarios considered.
 - `L::Matrix{Float64}`: primary delays for each trip and scenario
 - `x::Matrix{VariableRef}`: references to arc decision variables in the `model`.
 - `s::Matrix{VariableRef}`: references to the propagated delay variables in the `model`.
@@ -22,6 +23,7 @@ Model for the Vehicle Scheduling Problem (VSP) with propagated delays.
 struct VSPModel
     inst::VSPInstance # VSP instance
     model::JuMP.Model # VSP model
+    numScenarios::Int # number of scenarios
     L::Matrix{Float64} # primary trip delays for each scenario
     x::Matrix{VariableRef} # decision variable matrix
     s::Matrix{VariableRef} # propagated delay variable matrix
@@ -121,7 +123,7 @@ function VSPModel(
         @objective(model, Min, M * delay_expr + cost_expr)
     end
 
-    return VSPModel(inst, model, L, x, s)
+    return VSPModel(inst, model, numScenarios, L, x, s)
 end
 
 """

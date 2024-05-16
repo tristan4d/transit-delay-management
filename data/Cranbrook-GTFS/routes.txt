@@ -1,0 +1,12 @@
+﻿route_id,route_short_name,route_long_name,route_type,route_color,route_text_color
+1-EKT,1,Tamarack,3,004B8D,FFFFFF
+2-EKT,2,Highlands,3,8CC63F,FFFFFF
+3-EKT,3,Third Avenue,3,F37421,FFFFFF
+4-EKT,4,Slaterville,3,00AA4F,FFFFFF
+5-EKT,5,College,3,FCAF17,FFFFFF
+7-EKT,7,7th - 11th Avenue,3,00AEEF,FFFFFF
+14-EKT,14,14th Avenue,3,ED1D8F,FFFFFF
+22-EKT,22,KC Commuter,3,8CC63F,FFFFFF
+31-EKT,31,South Connector,3,004B8D,FFFFFF
+32-EKT,32,North Connector,3,8CC63F,FFFFFF
+41-EKT,41,Fernie / Sparwood / Elkford,3,004B8D,FFFFFF
