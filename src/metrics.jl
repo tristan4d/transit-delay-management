@@ -141,15 +141,15 @@ function getGeometry(
         shape = shapes[shapes.shape_id .== trips[trip, :shape_id], :shape_pts]
 
         geom = GeoInterface.LineString(shape[1])
+        push!(coordinates, geom)
         try
-            dh_start = GeoInterface.getpoint(coordinates[t-1], GeoInterface.npoint(coordinates[t-1]))
-            dh_end = GeoInterface.getpoint(geom, 1)
+            dh_start = GeoInterface.Point(trips[trip, :stop_lon], trips[trip, :stop_lat])
+            dh_end = GeoInterface.Point(trips[s[t+1], :start_lon], trips[s[t+1], :start_lat])
             push!(coordinates, GeoInterface.LineString([dh_start, dh_end]))
         catch
             nothing
         end
 
-        push!(coordinates, geom)
         distance += shapes[shapes.shape_id .== trips[trip, :shape_id], :shape_dist_traveled][1]
     end
 

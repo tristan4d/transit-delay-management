@@ -15,6 +15,7 @@ An instance of the Vehicle Scheduling Problem (VSP).
 - `l::Vector{Distribution}`: normal distribution for expected delays across each trip.
 - `C::Matrix{Float64}`: cost for using arc (i, j) in the VSP network.
 - `B::Matrix{Float64}`: buffer time on arc (i, j) in the VSP network.
+- `D::Matrix{Float64}`: D[i, j] is the distance from the end of trip i to the start of trip j.
 - `G::Matrix{Bool}`: 1 if arc (i, j) is usable in the VSP network, 0 otherwise.
 - `trips::DataFrame`: the trips DataFrame, see `loadGTFS` in utils.jl.
 """
@@ -24,6 +25,7 @@ struct VSPInstance
 	l::Vector{Distribution} # normal distributions for expected delay for all trips
 	C::Matrix{Float64} # adjacency-cost lists for all trips
 	B::Matrix{Float64} # buffer time between all trips
+	D::Matrix{Float64} # D[i, j] is the deadhead time from the end of trip i to the start of trip j
 	G::Matrix{Bool} # connections between trips (G[i,j] = 1 if arc i -> j in G)
 	trips::DataFrame # trips dataframe
 end
@@ -65,6 +67,7 @@ function VSPInstance(
 	G = zeros(Bool, n, n)
 	G[1, 2:end] .= 1 # add link from depot to each trip
 	G[2:end, 1] .= 1 # add link from each trip to depot
+	D = zeros(Float64, n-1, n-1) # deadhead time between start/stop points
 
 	for i ∈ 1:n-1
 		for j ∈ 1:n-1
@@ -74,6 +77,7 @@ function VSPInstance(
 			coords_1 = (trips[i, :stop_lat], trips[i, :stop_lon])
 			coords_2 = (trips[j, :start_lat], trips[j, :start_lon])
 			distance = haversine(coords_1, coords_2, 6372.8)
+			D[i, j] = distance / averageSpeed
 			if distance / averageSpeed <= timeDiff
 				G[i+1, j+1] = 1 # add link if vehicle can deadhead from i -> j
 				# ensure rational data
@@ -89,7 +93,7 @@ function VSPInstance(
 	M = sum(sort(maximum.(l), rev=true)[1:m+1])
     B[2:end, 1] .= M # *infinite* buffer time when returning to depot
 
-	return VSPInstance(n, M, l, C, B, G, trips)
+	return VSPInstance(n, M, l, C, B, D, G, trips)
 end
 
 """

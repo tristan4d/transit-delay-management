@@ -208,6 +208,7 @@ number.
 function plotVSP_time(sol::Union{VSPSolution, MCFSolution}; delays = nothing)
     trips = sol.mod.inst.trips
     B = sol.mod.inst.B
+    D = sol.mod.inst.D
     x = convert(Matrix{Bool}, round.(sol.x))
     s = nothing
 
@@ -246,8 +247,18 @@ function plotVSP_time(sol::Union{VSPSolution, MCFSolution}; delays = nothing)
             push!(annots, Plots.text(trips[trip, :route_id], :black, :center, 4))
 
             try
+                start = trips[trip, :stop_time]
+                stop = trips[this_schedule[i+1], :start_time]
+                deadhead = D[trip, this_schedule[i+1]]
                 plot!(
-                    [trips[trip, :stop_time], trips[this_schedule[i+1], :start_time]],
+                    [start, start+deadhead],
+                    [counter, counter];
+                    ls = :solid,
+                    lc = :black,
+                    la = 0.75
+                )
+                plot!(
+                    [start+deadhead, stop],
                     [counter, counter];
                     ls = :dash,
                     lc = :black,
@@ -299,7 +310,7 @@ end
 function plotVSP_map(metrics::DataFrame; schedule = nothing)
     lines = Leaflet.Layer[]
     endpoints = Leaflet.Layer[]
-    n = size(metrics, 1)
+    # n = size(metrics, 1)
     # block_cmap = range(colorant"yellow", stop=colorant"blue", length=n)
     block_cmap = palette(:tab20)
     lats = []
