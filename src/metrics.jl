@@ -16,26 +16,23 @@ function getSolutionStats(
     schedules = generate_blocks(x)
     n = sol.mod.inst.n
     if isnothing(delays)
-        L = sol.mod.L
-        numScenarios = sol.mod.numScenarios
+        L = sol.mod.L_train
+        numScenarios = sol.mod.n_train
     else
         L = delays
         numScenarios = size(delays, 2)
     end
+    
     B = sol.mod.inst.B
     propagated_delays = zeros(Float64, n-1)
     propagated_delay_errs = zeros(Float64, n-1)
-    try
-        propagated_delays = sol.s
-        propagated_delay_errs = sol.s_err
-    catch
-        this_s = zeros(Float64, n, numScenarios)
-        for scenario in 1:numScenarios
-            this_s[:, scenario] = feasibleDelays(sol.x, L[:, scenario], B)
-        end
-        propagated_delays = vec(mean(this_s, dims=2))[2:end]
-        propagated_delay_errs = vec(std(this_s, dims=2))[2:end]
+
+    this_s = zeros(Float64, n, numScenarios)
+    for scenario in 1:numScenarios
+        this_s[:, scenario] = feasibleDelays(sol.x, L[:, scenario], B)
     end
+    propagated_delays = vec(mean(this_s, dims=2))[2:end]
+    propagated_delay_errs = vec(std(this_s, dims=2))[2:end]
     trips = sol.mod.inst.trips
     metrics = DataFrame(
         [

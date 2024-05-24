@@ -16,7 +16,9 @@ Model for the Vehicle Scheduling Problem (VSP) with propagated delays.
 - `inst::VSPInstance`: VSP instance on which the model will be applied.
 - `model::JuMP.Model`: JuMP model for optimization.
 - `numScenarios::Int`: number of delay scenarios considered.
-- `L::Matrix{Float64}`: primary delays for each trip and scenario
+- `n_train::Int`: number of delay scenarios in the training set.
+- `L_train::Matrix{Float64}`: primary delays for each trip and scenario in the training set.
+- `L_test::Matrix{Float64}`: primary delays for each trip and scenario in the test set.
 - `x::Matrix{VariableRef}`: references to arc decision variables in the `model`.
 - `s::Matrix{VariableRef}`: references to the propagated delay variables in the `model`.
 """
@@ -24,7 +26,9 @@ struct VSPModel
     inst::VSPInstance # VSP instance
     model::JuMP.Model # VSP model
     numScenarios::Int # number of scenarios
-    L::Matrix{Float64} # primary trip delays for each scenario
+    n_train::Int # number of training scenarios
+    L_train::Matrix{Float64} # primary trip delays for each scenario in the training set
+    L_test::Matrix{Float64} # primary trip delays for each scenario in the test set
     x::Matrix{VariableRef} # decision variable matrix
     s::Matrix{VariableRef} # propagated delay variable matrix
 end
@@ -33,6 +37,7 @@ end
     VSPModel(
         inst::VSPInstance[,
         numScenarios = 100,
+        split = 1.0,
         randomSeed = 1,
         warmStart = false,
         isInt = false,
@@ -45,7 +50,8 @@ end
 
 Create a VSP model object from `inst`.
 
-`numScenarios` dictates how many delay scenarios to consider.  `randomSeed` to determine
+`numScenarios` dictates how many delay scenarios to consider.  `split` is the ratio of 
+scenarios that are included in the test set.  `randomSeed` to determine
 randomness of trip delays.  `warmStart` currently does nothing.  `isInt`
 enforces if arc decision variables should be integer or not.  `multiObj` enforces
 whether the model should apply ϵ-constrained optimization on the delay and cost objectives.
@@ -53,6 +59,7 @@ whether the model should apply ϵ-constrained optimization on the delay and cost
 function VSPModel(
     inst::VSPInstance;
     numScenarios = 100,
+    split = 1.0,
     randomSeed = 1,
     warmStart = false,
     isInt = false,
@@ -80,6 +87,10 @@ function VSPModel(
     Random.seed!(randomSeed)
     L = hcat(rand.(inst.l, numScenarios)...)'
     L = vcat(zeros(Float64, 1, numScenarios), L)
+    n_train = trunc(Int, numScenarios*split)
+    train_idx = sample(1:numScenarios, n_train, replace = false)
+    L_train = L[:, train_idx]
+    L_test = L[:, Not(train_idx)]
 
     # decision variable for arc i -> j
     if isInt
@@ -88,9 +99,9 @@ function VSPModel(
         @variable(model, x[1:n, 1:n] >= 0)
     end
     # variable for propagated delay at trip i
-    @variable(model, s[1:n-1, 1:numScenarios] >= 0)
+    @variable(model, s[1:n-1, 1:n_train] >= 0)
     # nonlinear variable x_ij * s_j
-    @variable(model, ϕ[1:n-1, 1:n-1, 1:numScenarios] >= 0)
+    @variable(model, ϕ[1:n-1, 1:n-1, 1:n_train] >= 0)
     # warm start with MCF model solution
     # if warmStart
     #     mcf_model = MCFModel(inst)
@@ -105,17 +116,17 @@ function VSPModel(
     # force non-existant links to 0
     @constraint(model, [i = 1:n, j = 1:n; !G[i, j]], x[i, j] == 0)
     # variable constraints
-    @constraint(model, [i = 1:n-1, j = 1:numScenarios], s[i, j] >= sum(ϕ[:, i, j] .+ x[2:end, i+1] .* (L[2:end, j] .- B[2:end, i+1])))
+    @constraint(model, [i = 1:n-1, j = 1:n_train], s[i, j] >= sum(ϕ[:, i, j] .+ x[2:end, i+1] .* (L_train[2:end, j] .- B[2:end, i+1])))
     # McCormick constraints for nonlinear variable
-    @constraint(model, [i = 1:n-1, j = 1:n-1, k = 1:numScenarios], ϕ[i, j, k] <= M * x[i+1, j+1])
-    @constraint(model, [i = 1:n-1, j = 1:n-1, k = 1:numScenarios], ϕ[i, j, k] <= s[i, k])
-    @constraint(model, [i = 1:n-1, j = 1:n-1, k = 1:numScenarios], ϕ[i, j, k] >= s[i, k] - M * (1 - x[i+1, j+1]))
+    @constraint(model, [i = 1:n-1, j = 1:n-1, k = 1:n_train], ϕ[i, j, k] <= M * x[i+1, j+1])
+    @constraint(model, [i = 1:n-1, j = 1:n-1, k = 1:n_train], ϕ[i, j, k] <= s[i, k])
+    @constraint(model, [i = 1:n-1, j = 1:n-1, k = 1:n_train], ϕ[i, j, k] >= s[i, k] - M * (1 - x[i+1, j+1]))
     # flow constraint
     @constraint(model, [i = 1:n], sum(x[i, :]) - sum(x[:, i]) == 0)
     # require each trip is completed
     @constraint(model, [i = 2:n], sum(x[:, i]) == 1)
     # minimize total propagated delay and link costs
-    @expression(model, delay_expr, sum(s) / numScenarios)
+    @expression(model, delay_expr, sum(s) / n_train)
     @expression(model, cost_expr, sum(C .* x))
     if multiObj
         @objective(model, Min, [delay_expr, cost_expr])
@@ -123,7 +134,7 @@ function VSPModel(
         @objective(model, Min, M * delay_expr + cost_expr)
     end
 
-    return VSPModel(inst, model, numScenarios, L, x, s)
+    return VSPModel(inst, model, numScenarios, n_train, L_train, L_test, x, s)
 end
 
 """

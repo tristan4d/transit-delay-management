@@ -4,7 +4,6 @@ using DataFrames
 using DataFramesMeta
 using Distributions
 
-
 """
     string2time(s::String15)
 
@@ -114,8 +113,8 @@ end
 
 """
     subsetGTFS(
-        df::DataFrame,
-        n::Int[,
+        df::DataFrame[,
+        n = nothing,
         routes = nothing,
         start_time = nothing,
         stop_time = nothing,
@@ -128,8 +127,8 @@ Selects a random subset of trips from `df` of size `n`.
 `stop_time` can be used to specify a time frame.
 """
 function subsetGTFS(
-    df::DataFrame,
-    n::Int;
+    df::DataFrame;
+    n = nothing,
     routes = nothing,
     start_time = nothing,
     stop_time = nothing,
@@ -145,8 +144,12 @@ function subsetGTFS(
     if !isnothing(stop_time)
         subset = subset[[stop <= stop_time for stop in subset.stop_time], :]
     end
-    Random.seed!(randomSeed)
-    idx = sample(1:size(subset, 1), n, replace = false)
+    if !isnothing(n) && n <= size(subset, 1)
+        Random.seed!(randomSeed)
+        idx = sample(1:size(subset, 1), n, replace = false)
+        subset = subset[idx, :]
+    end
 
-    return subset[idx, :]
+
+    return subset
 end

@@ -4,6 +4,7 @@ using Plots
 using Leaflet
 using GeoInterface
 using Colors
+using ColorSchemes
 using JuMP
 using Random
 using Statistics
@@ -204,13 +205,26 @@ Plot the vehicle schedules in `sol` over time.
 Colors indicate the block in the original GTFS files.  The number indicates the route
 number.
 """
-function plotVSP_time(sol::Union{VSPSolution, MCFSolution})
+function plotVSP_time(sol::Union{VSPSolution, MCFSolution}; delays = nothing)
     trips = sol.mod.inst.trips
+    B = sol.mod.inst.B
     x = convert(Matrix{Bool}, round.(sol.x))
+    s = nothing
+
+    if isnothing(delays)
+        s = sol.s
+    else
+        this_s = zeros(Float64, size(delays))
+        for scenario in 1:size(delays, 2)
+            this_s[:, scenario] = feasibleDelays(sol.x, delays[:, scenario], B)
+        end
+        s = vec(mean(this_s, dims=2))[2:end]
+    end
     schedules = generate_blocks(x)
-    time_plot = plot(;legend=false)
-    blocks = unique(trips[:, :block_id])
-    block_cmap = range(colorant"yellow", stop=colorant"blue", length=length(blocks))
+    time_plot = plot(; xlabel="time of day (hrs)", ylabel="vehicle schedule", legend=false)
+    # blocks = unique(trips[:, :block_id])
+    # block_cmap = range(colorant"yellow", stop=colorant"blue", length=length(blocks))
+    delay_cmap = reverse(ColorSchemes.roma)
     yflip!(true)
 
     counter = 1
@@ -223,7 +237,8 @@ function plotVSP_time(sol::Union{VSPSolution, MCFSolution})
             plot!(
                 [trips[trip, :start_time], trips[trip, :stop_time]],
                 [counter, counter];
-                lc = block_cmap[findfirst(==(trips[trip, :block_id]), blocks)],
+                # lc = block_cmap[findfirst(==(trips[trip, :block_id]), blocks)],
+                lc = get(delay_cmap, (s[trip]-minimum(s))/(maximum(s)-minimum(s))),
                 lw = 10
             )
             push!(annot_xs, (trips[trip, :start_time]+trips[trip, :stop_time])/2)
@@ -282,10 +297,11 @@ function plotVSP(inst::VSPInstance)
 end
 
 function plotVSP_map(metrics::DataFrame; schedule = nothing)
-    layers = Leaflet.Layer[]
+    lines = Leaflet.Layer[]
+    endpoints = Leaflet.Layer[]
     n = size(metrics, 1)
     # block_cmap = range(colorant"yellow", stop=colorant"blue", length=n)
-    block_cmap = palette(:tab10)
+    block_cmap = palette(:tab20)
     lats = []
     lons = []
     for (i, geom) in enumerate(metrics.geometry)
@@ -299,18 +315,31 @@ function plotVSP_map(metrics::DataFrame; schedule = nothing)
             append!(lons, [coord[1] for coord in coords])
             append!(lats, [coord[2] for coord in coords])
             translated_linestring = GeoInterface.LineString(map(x -> x + translation_vector, coords))
-            push!(layers, Leaflet.Layer(
+            push!(lines, Leaflet.Layer(
                 translated_linestring;
                 color=j%2==0 ? "gray" : color,
                 opacity=j%2==0 ? 0.5 : 1,
-                border_width=isnothing(schedule) ? 2*(n+1-i) : 2
+                # border_width=isnothing(schedule) ? 2*(n+1-i) : 2
+                border_width=2
+            ))
+            j%2==1 && push!(endpoints, Leaflet.Layer(
+                coords[1]+translation_vector;
+                color=:white,
+                opacity=1,
+                marker_size=4
+            ))
+            j%2==1 && push!(endpoints, Leaflet.Layer(
+                coords[end]+translation_vector;
+                color=:black,
+                opacity=1,
+                marker_size=4
             ))
         end
     end
 
     provider = Leaflet.CARTO()
     m = Leaflet.Map(;
-        layers=layers,
+        layers=vcat(lines, endpoints),
         provider=provider,
         zoom=12,
         center=[mean(lats), mean(lons)]
