@@ -222,10 +222,10 @@ function plotVSP_time(sol::Union{VSPSolution, MCFSolution}; delays = nothing)
         s = vec(mean(this_s, dims=2))[2:end]
     end
     schedules = generate_blocks(x)
-    time_plot = plot(; xlabel="time of day (hrs)", ylabel="vehicle schedule", legend=false)
+    delay_cmap = reverse(ColorSchemes.roma)
+    time_plot = plot(; xlabel="time of day (hrs)", ylabel="vehicle schedule", legend=false, colorbar=true)
     # blocks = unique(trips[:, :block_id])
     # block_cmap = range(colorant"yellow", stop=colorant"blue", length=length(blocks))
-    delay_cmap = reverse(ColorSchemes.roma)
     yflip!(true)
 
     counter = 1
@@ -274,6 +274,7 @@ function plotVSP_time(sol::Union{VSPSolution, MCFSolution}; delays = nothing)
     end
 
     ylims!(0, counter)
+
     return time_plot
 end
 

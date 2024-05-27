@@ -2,7 +2,6 @@ using DataFrames
 using Distances
 using Distributions
 using Graphs
-using Random
 
 """
 	VSPInstance
@@ -34,8 +33,7 @@ end
 	VSPInstance(
 		trips::DataFrame[,
 		l::Union{Matrix{Float64}, Nothing} = nothing,
-		averageSpeed::Float64 = 30.0,
-		randomSeed = 1
+		averageSpeed::Float64 = 30.0
 		]
 	)
 
@@ -48,10 +46,8 @@ by haversine distance and `averageSpeed`.
 function VSPInstance(
 	trips::DataFrame;
     l::Union{Matrix{Float64}, Nothing} = nothing, # [μ, σ]
-	averageSpeed::Float64 = 30.0,
-	randomSeed = 1,
+	averageSpeed::Float64 = 30.0
 )
-	Random.seed!(randomSeed)
 	n = size(trips, 1) + 1
 	if isnothing(l)
         μ = (trips[:, :stop_time] .- trips[:, :start_time]) * 0.25
@@ -59,7 +55,9 @@ function VSPInstance(
         # generate normal distributions for each trip
 		l = truncated.(Normal.(μ, σ), 0.0, 4*μ)
 	else
-		l = truncated.(Normal.(l[:, 1], l[:, 2]), 0.0, 4*μ)
+		μ = l[:, 1]
+		σ = l[:, 2]
+		l = truncated.(Normal.(μ, σ), 0.0, 4*μ)
     end
 	C = zeros(Float64, n, n)
     C[1, 2:end] .= 100 # cost per vehicle
