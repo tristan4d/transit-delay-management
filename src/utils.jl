@@ -96,7 +96,7 @@ function loadGTFS(path::String)
         lat_lon_tuples = [(row.shape_pt_lon, row.shape_pt_lat) for row in eachrow(shape)]
         
         # extract shape_dist_traveled
-        dist_traveled = sum(shape.shape_dist_traveled)
+        dist_traveled = maximum(shape.shape_dist_traveled) / 1000 # km
         
         push!(shape_pts, lat_lon_tuples)
         push!(shape_dist_traveled, dist_traveled)

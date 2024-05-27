@@ -24,6 +24,7 @@ function getSolutionStats(
     end
     
     B = sol.mod.inst.B
+    D = sol.mod.inst.D
     propagated_delays = zeros(Float64, n-1)
     propagated_delay_errs = zeros(Float64, n-1)
 
@@ -42,6 +43,7 @@ function getSolutionStats(
             Float64[],
             Float64[],
             Float64[],
+            Float64[],
             Vector{Vector{GeoInterface.LineString}}()
         ],
         [
@@ -51,6 +53,7 @@ function getSolutionStats(
             "propagated_delay",
             "propagated_delay_err",
             "trip_distance",
+            "deadhead_distance",
             "geometry"
         ]
     )
@@ -62,6 +65,7 @@ function getSolutionStats(
         propagated_delay = sum(propagated_delays[schedule])
         propagated_delay_err = sum(propagated_delay_errs[schedule])
         distance, geometry = getGeometry(schedule, trips, shapes)
+        deadhead_distance = getDeadhead(schedule, D)
         push!(metrics, [
             duration,
             num_trips,
@@ -69,11 +73,22 @@ function getSolutionStats(
             propagated_delay,
             propagated_delay_err,
             distance,
+            deadhead_distance,
             geometry
         ])
     end
     
     return SolutionStats(sol, metrics)
+end
+
+function getDeadhead(s::Vector{Int}, D::Matrix{Float64})
+    distance = 0.0
+
+    for i in 1:size(s, 1)-1
+        distance += D[s[i], s[i+1]]
+    end
+
+    return distance
 end
 
 function getBlockLength(s::Vector{Int}, trips::DataFrame)
