@@ -3,6 +3,7 @@ using Dates
 using DataFrames
 using DataFramesMeta
 using Distributions
+using LinearAlgebra
 
 """
     string2time(s::String15)
@@ -154,19 +155,20 @@ function subsetGTFS(
     return subset
 end
 
-function primaryDelays(trips::DataFrame; shape = 0)
+function primaryDelays(trips::DataFrame; form = 0, bbox = nothing, shapes = nothing)
     n = size(trips, 1)
     min_start = minimum(trips.start_time)
     max_start = maximum(trips.start_time)
     l = zeros(Float64, n, 2)
     t = trips[:, :stop_time] - trips[:, :start_time]
 
-    if shape == 0
-        return nothing
-    elseif shape == 1
+    if form == 0
+        dist = Uniform(min_start, max_start)
+        x = trips.start_time
+    elseif form == 1
         dist = Chi(1)
         x = (trips.start_time .- min_start) ./ (max_start - min_start) .* 2
-    elseif shape == 2
+    elseif form == 2
         dist = Chi(1)
         x = ((trips.start_time .- min_start) ./ (max_start - min_start) .- 1) .* (-2)
     end
@@ -175,5 +177,88 @@ function primaryDelays(trips::DataFrame; shape = 0)
     l[:, 1] = t.*λ
     l[:, 2] = t.*λ/2
 
+    if !isnothing(bbox) && !isnothing(shapes)
+        for i in 1:n
+            if do_paths_intersect(shapes[shapes.shape_id .== trips[i, :shape_id], :shape_pts][1], bbox)
+                l[i, 1] *= 2
+            end
+        end
+    end
+
     return l
+end
+
+# Function to check if two line segments (p1, q1) and (p2, q2) intersect
+function do_segments_intersect(p1, q1, p2, q2)
+    # Helper function to find the orientation of the ordered triplet (p, q, r)
+    # The function returns:
+    # 0 -> p, q and r are collinear
+    # 1 -> Clockwise
+    # 2 -> Counterclockwise
+    function orientation(p, q, r)
+        val = (q[2] - p[2]) * (r[1] - q[1]) - (q[1] - p[1]) * (r[2] - q[2])
+        if val == 0
+            return 0  # collinear
+        elseif val > 0
+            return 1  # clockwise
+        else
+            return 2  # counterclockwise
+        end
+    end
+
+    # Helper function to check if point q lies on line segment pr
+    function on_segment(p, q, r)
+        return q[1] <= max(p[1], r[1]) && q[1] >= min(p[1], r[1]) &&
+               q[2] <= max(p[2], r[2]) && q[2] >= min(p[2], r[2])
+    end
+
+    # Find the four orientations needed for the general and special cases
+    o1 = orientation(p1, q1, p2)
+    o2 = orientation(p1, q1, q2)
+    o3 = orientation(p2, q2, p1)
+    o4 = orientation(p2, q2, q1)
+
+    # General case
+    if o1 != o2 && o3 != o4
+        return true
+    end
+
+    # Special cases
+    # p1, q1 and p2 are collinear and p2 lies on segment p1q1
+    if o1 == 0 && on_segment(p1, p2, q1)
+        return true
+    end
+
+    # p1, q1 and q2 are collinear and q2 lies on segment p1q1
+    if o2 == 0 && on_segment(p1, q2, q1)
+        return true
+    end
+
+    # p2, q2 and p1 are collinear and p1 lies on segment p2q2
+    if o3 == 0 && on_segment(p2, p1, q2)
+        return true
+    end
+
+    # p2, q2 and q1 are collinear and q1 lies on segment p2q2
+    if o4 == 0 && on_segment(p2, q1, q2)
+        return true
+    end
+
+    # Doesn't fall in any of the above cases
+    return false
+end
+
+# Main function to check if two vectors of lat/lon tuples intersect
+function do_paths_intersect(path1::Vector{Tuple{Float64, Float64}}, path2::Vector{Tuple{Float64, Float64}})
+    n1 = length(path1)
+    n2 = length(path2)
+    
+    for i in 1:(n1-1)
+        for j in 1:(n2-1)
+            if do_segments_intersect(path1[i], path1[i+1], path2[j], path2[j+1])
+                return true
+            end
+        end
+    end
+    return false
 end

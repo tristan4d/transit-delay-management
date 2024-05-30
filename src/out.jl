@@ -223,7 +223,12 @@ function plotVSP_time(sol::Union{VSPSolution, MCFSolution}; delays = nothing)
     end
     schedules = generate_blocks(x)
     delay_cmap = reverse(ColorSchemes.roma)
-    time_plot = plot(; xlabel="time of day (hrs)", ylabel="vehicle schedule", legend=false, colorbar=true)
+    time_plot = plot(;
+        xlabel="time of day (hrs)",
+        ylabel="vehicle schedule",
+        legend=false,
+        colorbar=true
+    )
     # blocks = unique(trips[:, :block_id])
     # block_cmap = range(colorant"yellow", stop=colorant"blue", length=length(blocks))
     yflip!(true)
@@ -275,7 +280,20 @@ function plotVSP_time(sol::Union{VSPSolution, MCFSolution}; delays = nothing)
 
     ylims!(0, counter)
 
-    return time_plot
+    gr()
+    l = @layout [a{0.95w} b]
+    cmap = cgrad(delay_cmap)
+    p2 = heatmap(
+        rand(2,2),
+        clims=(minimum(s)*60, maximum(s)*60),
+        framestyle=:none,
+        c=cmap,
+        cbar=true,
+        lims=(-1,0),
+        colorbar_title="delay (mins)"
+    )
+
+    return plot(time_plot, p2, layout=l)
 end
 
 """
@@ -331,7 +349,6 @@ function plotVSP_map(metrics::DataFrame; schedule = nothing)
                 translated_linestring;
                 color=j%2==0 ? "gray" : color,
                 opacity=j%2==0 ? 0.5 : 1,
-                # border_width=isnothing(schedule) ? 2*(n+1-i) : 2
                 border_width=2
             ))
             j%2==1 && push!(endpoints, Leaflet.Layer(
