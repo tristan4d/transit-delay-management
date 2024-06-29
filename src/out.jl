@@ -40,7 +40,7 @@ end
 
 Optimize the VSP model, `mod`.
 """
-function solve!(mod::VSPModel)
+function solve!(mod::VSPModel; silent=true)
     optimize!(mod.model)
     numTrips = mod.inst.n - 1
     x = value.(mod.x)
@@ -48,12 +48,14 @@ function solve!(mod::VSPModel)
     isInt = all(isinteger.(x))
     numVehicles = sum(x[1, :])
 
-    @show numTrips
-    @show numVehicles
-    @show isInt
-    @show termination_status(mod.model)
-    @show objective_value(mod.model)
-    @show solve_time(mod.model)
+    if !silent
+        @show numTrips
+        @show numVehicles
+        @show isInt
+        @show termination_status(mod.model)
+        @show objective_value(mod.model)
+        @show solve_time(mod.model)
+    end
 
     return VSPSolution(
         numVehicles,
@@ -226,6 +228,7 @@ function plotVSP_time(sol::Union{VSPSolution, MCFSolution}; delays = nothing)
     time_plot = plot(;
         xlabel="time of day (hrs)",
         ylabel="vehicle schedule",
+        yticks=0:sol.numVehicles+1,
         legend=false,
         colorbar=true
     )

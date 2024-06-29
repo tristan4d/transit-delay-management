@@ -57,7 +57,7 @@ function VSPInstance(
 	else
 		μ = l[:, 1]
 		σ = l[:, 2]
-		l = truncated.(Normal.(μ, σ), 0.0, 4*μ)
+		l = truncated.(Normal.(μ, σ), 0.0, 2 .*(trips[:, :stop_time] .- trips[:, :start_time]))
     end
 	C = zeros(Float64, n, n)
     C[1, 2:end] .= 100 # cost per vehicle

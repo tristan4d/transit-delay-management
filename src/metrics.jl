@@ -4,6 +4,11 @@ using Statistics
 
 struct SolutionStats
     sol::Union{VSPSolution, MCFSolution}
+    μ::Float64
+    μ_10::Float64
+    σ::Float64
+    σ_10::Float64
+    utilization::Float64
     metrics::DataFrame
 end
 
@@ -58,12 +63,16 @@ function getSolutionStats(
         ]
     )
 
+    total_duration = 0.0
+    total_nis_length = 0.0
     for schedule in schedules
         duration = getBlockLength(schedule, trips)
+        total_duration += duration
         num_trips = length(schedule)
         utilization = 1 - notInServiceLength(schedule, trips) / duration
-        propagated_delay = sum(propagated_delays[schedule])
-        propagated_delay_err = sum(propagated_delay_errs[schedule])
+        total_nis_length += notInServiceLength(schedule, trips)
+        propagated_delay = mean(propagated_delays[schedule])
+        propagated_delay_err = std(propagated_delays[schedule])
         distance, geometry = getGeometry(schedule, trips, shapes)
         deadhead_distance = getDeadhead(schedule, D)
         push!(metrics, [
@@ -78,7 +87,17 @@ function getSolutionStats(
         ])
     end
     
-    return SolutionStats(sol, metrics)
+    n_10 = ceil(Int, n/10)
+    s_10 = ceil(Int, numScenarios/10)
+    return SolutionStats(
+        sol,
+        mean(sort(this_s, dims=2, rev=true)[:, 1:s_10]) * 60,
+        mean(sort(propagated_delays, rev=true)[1:n_10]) * 60,
+        std(sort(this_s, dims=2, rev=true)[:, 1:s_10]) * 60,
+        std(sort(propagated_delays, rev=true)[1:n_10]) * 60,
+        1 - total_nis_length / total_duration, 
+        metrics
+    )
 end
 
 function getDeadhead(s::Vector{Int}, D::Matrix{Float64})
@@ -169,4 +188,16 @@ function getGeometry(
     end
 
     return distance, coordinates
+end
+
+function compareSchedules(
+    sol_1::Union{VSPSolution, MCFSolution},
+    sol_2::Union{VSPSolution, MCFSolution}
+)
+    x_1 = convert(Matrix{Bool}, round.(sol_1.x))
+    x_2 = convert(Matrix{Bool}, round.(sol_2.x))
+    s_1 = generate_blocks(x_1)
+    s_2 = generate_blocks(x_2)
+
+    return size(intersect(s_1, s_2), 1) / size(union(s_1, s_2), 1)
 end

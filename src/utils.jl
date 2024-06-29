@@ -155,7 +155,14 @@ function subsetGTFS(
     return subset
 end
 
-function primaryDelays(trips::DataFrame; form = 0, bbox = nothing, shapes = nothing)
+function primaryDelays(
+    trips::DataFrame;
+    form = 0,
+    meanMulti = 1,
+    stdMulti = 1,
+    bbox = nothing,
+    shapes = nothing
+)
     n = size(trips, 1)
     min_start = minimum(trips.start_time)
     max_start = maximum(trips.start_time)
@@ -173,9 +180,9 @@ function primaryDelays(trips::DataFrame; form = 0, bbox = nothing, shapes = noth
         x = ((trips.start_time .- min_start) ./ (max_start - min_start) .- 1) .* (-2)
     end
 
-    λ = pdf.(dist, x) / 2
-    l[:, 1] = t.*λ
-    l[:, 2] = t.*λ/2
+    λ = pdf.(dist, x)
+    l[:, 1] = t.*λ.*meanMulti/10
+    l[:, 2] = t.*stdMulti/2
 
     if !isnothing(bbox) && !isnothing(shapes)
         for i in 1:n

@@ -61,8 +61,8 @@ function VSPModel(
     numScenarios = 100,
     split = 1.0,
     randomSeed = 1,
-    warmStart = false,
-    isInt = false,
+    warmStart = nothing,
+    isInt = true,
     multiObj = false,
     silent = true,
     outputFlag = 0,
@@ -102,17 +102,10 @@ function VSPModel(
     @variable(model, s[1:n-1, 1:n_train] >= 0)
     # nonlinear variable x_ij * s_j
     @variable(model, ϕ[1:n-1, 1:n-1, 1:n_train] >= 0)
-    # warm start with MCF model solution
-    # if warmStart
-    #     mcf_model = MCFModel(inst)
-    #     mcf_sol = solve!(mcf_model)
-    #     set_start_value.(x, mcf_sol.x)
-    #     s_start = feasibleDelays(mcf_sol.x, l, B)[2:end] * ones(numScenarios)'
-    #     set_start_value.(s, s_start)
-    #     ϕ_start = mcf_sol.x[2:end, 2:end] .* (feasibleDelays(mcf_sol.x, l, B)[2:end] * ones(n-1)')
-    #     ϕ_start = repeat(reshape(ϕ_start, 1, n-1, n-1), 1, 1, numScenarios)
-    #     set_start_value.(ϕ, ϕ_start)
-    # end
+    # warm start with provided solution
+    if !isnothing(warmStart)
+        set_start_value.(x, warmStart.x)
+    end
     # force non-existant links to 0
     @constraint(model, [i = 1:n, j = 1:n; !G[i, j]], x[i, j] == 0)
     # variable constraints

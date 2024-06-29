@@ -1,2 +1,8 @@
 # osm file #
 *.pbf
+
+# images #
+*.png
+
+# data #
+*.txt
