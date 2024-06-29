@@ -12,6 +12,7 @@ struct SolutionStats
     metrics::DataFrame
 end
 
+# test comment
 function getSolutionStats(
     sol::Union{VSPSolution, MCFSolution},
     shapes::DataFrame,
