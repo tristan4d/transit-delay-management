@@ -49,18 +49,21 @@ function VSPInstance(
 	averageSpeed::Float64 = 30.0
 )
 	n = size(trips, 1) + 1
-	if isnothing(l)
-        μ = (trips[:, :stop_time] .- trips[:, :start_time]) * 0.25
-        σ = μ * 0.1 / 0.25
-        # generate normal distributions for each trip
-		l = truncated.(Normal.(μ, σ), 0.0, 4*μ)
-	else
-		μ = l[:, 1]
-		σ = l[:, 2]
-		l = truncated.(Normal.(μ, σ), 0.0, 2 .*(trips[:, :stop_time] .- trips[:, :start_time]))
-    end
+	trip_lengths = trips[:, :stop_time] .- trips[:, :start_time]
+	l_temp = Distribution[]
+	for i in 1:size(trips, 1)
+		if isnothing(l)
+			μ = trip_lengths[i] / 10
+			σ = trip_lengths[i] / 2
+		else
+			μ = l[i, 1]
+			σ = l[i, 2]
+		end
+		push!(l_temp, truncated(Normal(μ, σ), upper=trip_lengths[i]*2))
+	end
+	l = l_temp
 	C = zeros(Float64, n, n)
-    C[1, 2:end] .= 100 # cost per vehicle
+    C[1, 2:end] .= 400 # cost per vehicle
 	B = zeros(Float64, n, n)
 	G = zeros(Bool, n, n)
 	G[1, 2:end] .= 1 # add link from depot to each trip

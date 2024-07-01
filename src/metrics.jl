@@ -87,14 +87,13 @@ function getSolutionStats(
         ])
     end
     
-    n_10 = ceil(Int, n/10)
     s_10 = ceil(Int, numScenarios/10)
     return SolutionStats(
         sol,
+        mean(this_s) * 60,
         mean(sort(this_s, dims=2, rev=true)[:, 1:s_10]) * 60,
-        mean(sort(propagated_delays, rev=true)[1:n_10]) * 60,
+        std(this_s) * 60,
         std(sort(this_s, dims=2, rev=true)[:, 1:s_10]) * 60,
-        std(sort(propagated_delays, rev=true)[1:n_10]) * 60,
         1 - total_nis_length / total_duration, 
         metrics
     )

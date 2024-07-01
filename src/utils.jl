@@ -158,8 +158,8 @@ end
 function primaryDelays(
     trips::DataFrame;
     form = 0,
-    meanMulti = 1,
-    stdMulti = 1,
+    meanMulti = 0.1,
+    stdMulti = 0.5,
     bbox = nothing,
     shapes = nothing
 )
@@ -181,8 +181,8 @@ function primaryDelays(
     end
 
     λ = pdf.(dist, x)
-    l[:, 1] = t.*λ.*meanMulti/10
-    l[:, 2] = t.*stdMulti/2
+    l[:, 1] = t.*λ.*meanMulti
+    l[:, 2] = t.*stdMulti
 
     if !isnothing(bbox) && !isnothing(shapes)
         for i in 1:n

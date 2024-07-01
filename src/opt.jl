@@ -39,7 +39,7 @@ end
         numScenarios = 100,
         split = 1.0,
         randomSeed = 1,
-        warmStart = false,
+        warmStart = nothing,
         isInt = false,
         multiObj = false,
         silent = true,
@@ -52,9 +52,10 @@ Create a VSP model object from `inst`.
 
 `numScenarios` dictates how many delay scenarios to consider.  `split` is the ratio of 
 scenarios that are included in the test set.  `randomSeed` to determine
-randomness of trip delays.  `warmStart` currently does nothing.  `isInt`
-enforces if arc decision variables should be integer or not.  `multiObj` enforces
-whether the model should apply ϵ-constrained optimization on the delay and cost objectives.
+randomness of trip delays.  `warmStart` can be used to initiate link variables from
+an input solution.  `isInt`enforces if arc decision variables should be integer or not.
+`multiObj` enforces whether the model should apply ϵ-constrained optimization on the
+delay and cost objectives.
 """
 function VSPModel(
     inst::VSPInstance;
@@ -86,6 +87,7 @@ function VSPModel(
     G = inst.G
     Random.seed!(randomSeed)
     L = hcat(rand.(inst.l, numScenarios)...)'
+    L = max.(L, 0)
     L = vcat(zeros(Float64, 1, numScenarios), L)
     n_train = trunc(Int, numScenarios*split)
     train_idx = sample(1:numScenarios, n_train, replace = false)
