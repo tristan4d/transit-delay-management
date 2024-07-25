@@ -200,14 +200,23 @@ function plotVSP(sol::Union{VSPSolution, MCFSolution})
 end
 
 """
-    plotVSP_time(sol::Union{VSPSolution, MCFSolution})
+    plotVSP_time(
+    sol::Union{VSPSolution, MCFSolution}[,
+    delays = nothing,
+    ridership = nothing
+    ]
+    )
 
 Plot the vehicle schedules in `sol` over time.
 
 Colors indicate the block in the original GTFS files.  The number indicates the route
 number.
 """
-function plotVSP_time(sol::Union{VSPSolution, MCFSolution}; delays = nothing)
+function plotVSP_time(
+    sol::Union{VSPSolution, MCFSolution};
+    delays = nothing,
+    ridership = nothing
+    )
     trips = sol.mod.inst.trips
     B = sol.mod.inst.B
     D = sol.mod.inst.D
@@ -223,6 +232,10 @@ function plotVSP_time(sol::Union{VSPSolution, MCFSolution}; delays = nothing)
         end
         s = vec(mean(this_s, dims=2))[2:end]
     end
+    if !isnothing(ridership)
+        s = s .* ridership
+    end
+
     schedules = generate_blocks(x)
     delay_cmap = reverse(ColorSchemes.roma)
     time_plot = plot(;
@@ -293,7 +306,7 @@ function plotVSP_time(sol::Union{VSPSolution, MCFSolution}; delays = nothing)
         c=cmap,
         cbar=true,
         lims=(-1,0),
-        colorbar_title="delay (mins)"
+        colorbar_title=(isnothing(ridership) ? "delay (mins)" : "passenger delay (passenger ⋅ mins)")
     )
 
     return plot(time_plot, p2, layout=l)
@@ -404,4 +417,15 @@ function generate_blocks(x::Matrix{Bool})
     end
 
     return schedules
+end
+
+function runTimeAnalysis(sol::MCFSolution, delays::Matrix{Float64})
+    instance = sol.mod.inst
+
+    instance.trips.stop_time .+= mean(delays, dims=2)
+
+    mcf_model = MCFModel(instance)
+    mcf_solution = solve!(mcf_model)
+
+    return mcf_solution
 end

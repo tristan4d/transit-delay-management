@@ -39,7 +39,7 @@ end
         numScenarios = 100,
         split = 1.0,
         randomSeed = 1,
-        warmStart = false,
+        warmStart = nothing,
         isInt = false,
         multiObj = false,
         silent = true,
@@ -52,9 +52,10 @@ Create a VSP model object from `inst`.
 
 `numScenarios` dictates how many delay scenarios to consider.  `split` is the ratio of 
 scenarios that are included in the test set.  `randomSeed` to determine
-randomness of trip delays.  `warmStart` currently does nothing.  `isInt`
-enforces if arc decision variables should be integer or not.  `multiObj` enforces
-whether the model should apply ϵ-constrained optimization on the delay and cost objectives.
+randomness of trip delays.  `warmStart` can be used to initiate link variables from
+an input solution.  `isInt`enforces if arc decision variables should be integer or not.
+`multiObj` enforces whether the model should apply ϵ-constrained optimization on the
+delay and cost objectives.
 """
 function VSPModel(
     inst::VSPInstance;
@@ -80,6 +81,7 @@ function VSPModel(
     set_attribute(model, "OutputFlag", outputFlag)
     set_attribute(model, "TimeLimit", timeLimit)
     n = inst.n
+    r = inst.r
     M = inst.M
     C = inst.C
     B = inst.B
@@ -119,12 +121,12 @@ function VSPModel(
     # require each trip is completed
     @constraint(model, [i = 2:n], sum(x[:, i]) == 1)
     # minimize total propagated delay and link costs
-    @expression(model, delay_expr, sum(s) / n_train)
+    @expression(model, delay_expr, sum(r' * s) / n_train)
     @expression(model, cost_expr, sum(C .* x))
     if multiObj
-        @objective(model, Min, [delay_expr, cost_expr])
+        @objective(model, Min, [37 * delay_expr, cost_expr])
     else
-        @objective(model, Min, M * delay_expr + cost_expr)
+        @objective(model, Min, 37 * delay_expr + cost_expr) # $25 per hour of wait time
     end
 
     return VSPModel(inst, model, numScenarios, n_train, L_train, L_test, x, s)
