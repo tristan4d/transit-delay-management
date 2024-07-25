@@ -12,6 +12,7 @@ An instance of the Vehicle Scheduling Problem (VSP).
 - `n::Int`: the number of trips in the network plus one, representing the depot.
 - `M::Float64`: maximum possible value for propagated delay of any trip.
 - `l::Vector{Distribution}`: normal distribution for expected delays across each trip.
+- `r::Vector{Float64}`: ridership for each trip.
 - `C::Matrix{Float64}`: cost for using arc (i, j) in the VSP network.
 - `B::Matrix{Float64}`: buffer time on arc (i, j) in the VSP network.
 - `D::Matrix{Float64}`: D[i, j] is the distance from the end of trip i to the start of trip j.
@@ -22,6 +23,7 @@ struct VSPInstance
 	n::Int # number of trips + depot
 	M::Float64 # big-M constraint variable for propagated delay
 	l::Vector{Distribution} # normal distributions for expected delay for all trips
+	r::Vector{Float64} # ridership for all trips
 	C::Matrix{Float64} # adjacency-cost lists for all trips
 	B::Matrix{Float64} # buffer time between all trips
 	D::Matrix{Float64} # D[i, j] is the deadhead time from the end of trip i to the start of trip j
@@ -32,38 +34,46 @@ end
 """
 	VSPInstance(
 		trips::DataFrame[,
-		l::Union{Matrix{Float64}, Nothing} = nothing,
+		randomSeed = 1,
+		l::Union{Matrix{Float64}, Vector{Distribution}, Nothing} = nothing,
+		r::Union{Vector{Float64}, Nothing} = nothing,
 		averageSpeed::Float64 = 30.0
 		]
 	)
 
 Create a VSPInstance object from the `trips` DataFrame.
 
-Expected trip delays may be specified by `l` which has mean delays in the first column
-and standard deviations in the second.  Possible deadheads are determined
-by haversine distance and `averageSpeed`.
+Expected trip delays may be specified by `l` which is a vector of distributions or 
+a matrix with mean delays in the first columnand standard deviations in the second.
+Trip ridership may be specified by `r`.  Possible deadheads are determined by
+haversine distance and `averageSpeed`.
 """
 function VSPInstance(
 	trips::DataFrame;
-    l::Union{Matrix{Float64}, Nothing} = nothing, # [μ, σ]
+	randomSeed = 1,
+    l::Union{Matrix{Float64}, Vector{Distribution}, Nothing} = nothing, # [μ, σ]
+	r::Union{Vector{Float64}, Nothing} = nothing,
 	averageSpeed::Float64 = 30.0
 )
 	n = size(trips, 1) + 1
-	trip_lengths = trips[:, :stop_time] .- trips[:, :start_time]
-	l_temp = Distribution[]
-	for i in 1:size(trips, 1)
-		if isnothing(l)
-			μ = trip_lengths[i] / 10
-			σ = trip_lengths[i] / 2
+	delays = Distribution[]
+	if isnothing(l)
+		delays = getDelays(trips; randomSeed=randomSeed)
+	else
+		if eltype(l) == Distribution
+			delays = l
 		else
-			μ = l[i, 1]
-			σ = l[i, 2]
+			trip_lengths = trips[:, :stop_time] .- trips[:, :start_time]
+			μ = l[:, 1]
+			σ = l[:, 2]
+
+			for (i, tl) in enumerate(trip_lengths)
+				push!(delays, truncated(Normal(μ[i], σ[i]), upper=tl))
+			end
 		end
-		push!(l_temp, truncated(Normal(μ, σ), upper=trip_lengths[i]*2))
 	end
-	l = l_temp
 	C = zeros(Float64, n, n)
-    C[1, 2:end] .= 400 # cost per vehicle
+    C[1, 2:end] .= 600 # cost per vehicle
 	B = zeros(Float64, n, n)
 	G = zeros(Bool, n, n)
 	G[1, 2:end] .= 1 # add link from depot to each trip
@@ -83,7 +93,7 @@ function VSPInstance(
 				G[i+1, j+1] = 1 # add link if vehicle can deadhead from i -> j
 				# ensure rational data
                 B[i+1, j+1] = round(timeDiff - distance / averageSpeed; digits = 2)
-                C[i+1, j+1] = round(distance + timeDiff; digits = 2)
+                C[i+1, j+1] = round(distance / averageSpeed + timeDiff; digits = 2) * 160 # cost per hour
 			end
 		end
 	end
@@ -91,10 +101,15 @@ function VSPInstance(
 	# using longest path to tighten big-M
 	g = SimpleDiGraph(G[2:end, 2:end])
 	m = -1*minimum(Graphs.dijkstra_shortest_paths(g, findall(G[1,2:end]), -1*ones(Int, n-1, n-1)).dists)
-	M = sum(sort(maximum.(l), rev=true)[1:m+1])
+	M = sum(sort(maximum.(delays), rev=true)[1:m+1])
     B[2:end, 1] .= M # *infinite* buffer time when returning to depot
 
-	return VSPInstance(n, M, l, C, B, D, G, trips)
+	# get ridership
+	if isnothing(r)
+		r = getRidership(trips; randomSeed=randomSeed)
+	end
+
+	return VSPInstance(n, M, delays, r, C, B, D, G, trips)
 end
 
 """

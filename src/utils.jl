@@ -4,6 +4,7 @@ using DataFrames
 using DataFramesMeta
 using Distributions
 using LinearAlgebra
+using Random
 
 """
     string2time(s::String15)
@@ -193,6 +194,45 @@ function primaryDelays(
     end
 
     return l
+end
+
+function getDelays(
+    trips::DataFrame;
+    randomSeed = nothing,
+    meanMulti = 0.1,
+    stdMulti = 0.5
+)
+    if !isnothing(randomSeed)
+        Random.seed!(randomSeed)
+    end
+
+    trip_lengths = trips.stop_time - trips.start_time
+    dists = Uniform.(0, trip_lengths)
+    μ = rand.(dists).*meanMulti
+    σ = rand.(dists).*stdMulti
+
+    delays = Distribution[]
+    for (i, tl) in enumerate(trip_lengths)
+  		push!(delays, truncated(Normal(μ[i], σ[i]), upper=tl))
+    end
+
+    return delays
+end
+
+function getRidership(
+    trips::DataFrame;
+    randomSeed = nothing,
+    min = 0,
+    max = 120,
+)
+    if !isnothing(randomSeed)
+        Random.seed!(randomSeed)
+    end
+
+    n = size(trips, 1)
+    dist = Uniform(min, max)
+
+    return rand(dist, n)
 end
 
 # Function to check if two line segments (p1, q1) and (p2, q2) intersect

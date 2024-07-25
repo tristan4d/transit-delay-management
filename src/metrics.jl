@@ -4,6 +4,7 @@ using Statistics
 
 struct SolutionStats
     sol::Union{VSPSolution, MCFSolution}
+    cost::Float64
     μ::Float64
     μ_10::Float64
     σ::Float64
@@ -15,7 +16,8 @@ end
 function getSolutionStats(
     sol::Union{VSPSolution, MCFSolution},
     shapes::DataFrame,
-    delays::Union{Matrix{Float64}, Nothing} = nothing
+    delays::Union{Matrix{Float64}, Nothing} = nothing;
+    ridership = nothing
 )
     x = convert(Matrix{Bool}, round.(sol.x))
     schedules = generate_blocks(x)
@@ -36,6 +38,9 @@ function getSolutionStats(
     this_s = zeros(Float64, n, numScenarios)
     for scenario in 1:numScenarios
         this_s[:, scenario] = feasibleDelays(sol.x, L[:, scenario], B)
+        if !isnothing(ridership)
+            this_s[2:end, scenario] = this_s[2:end, scenario] .* ridership
+        end
     end
     propagated_delays = vec(mean(this_s, dims=2))[2:end]
     propagated_delay_errs = vec(std(this_s, dims=2))[2:end]
@@ -55,8 +60,8 @@ function getSolutionStats(
             "duration",
             "num_trips",
             "utilization",
-            "propagated_delay",
-            "propagated_delay_err",
+            (isnothing(ridership) ? "propagated_delay" : "propagated_passenger_delay"),
+            (isnothing(ridership) ? "propagated_delay_err" : "propagated_passenger_delay_err"),
             "trip_distance",
             "deadhead_distance",
             "geometry"
@@ -73,6 +78,9 @@ function getSolutionStats(
         total_nis_length += notInServiceLength(schedule, trips)
         propagated_delay = mean(propagated_delays[schedule])
         propagated_delay_err = std(propagated_delays[schedule])
+        if isnan(propagated_delay_err)
+            propagated_delay_err = 0.0
+        end
         distance, geometry = getGeometry(schedule, trips, shapes)
         deadhead_distance = getDeadhead(schedule, D)
         push!(metrics, [
@@ -87,9 +95,15 @@ function getSolutionStats(
         ])
     end
     
+    cost = sol.objective_value
+    if eltype(sol) == MCFSolution
+        cost += sum(propagated_delays) * 37
+    end
+    
     s_10 = ceil(Int, numScenarios/10)
     return SolutionStats(
         sol,
+        cost,
         mean(this_s) * 60,
         mean(sort(this_s, dims=2, rev=true)[:, 1:s_10]) * 60,
         std(this_s) * 60,
@@ -195,8 +209,6 @@ function compareSchedules(
 )
     x_1 = convert(Matrix{Bool}, round.(sol_1.x))
     x_2 = convert(Matrix{Bool}, round.(sol_2.x))
-    s_1 = generate_blocks(x_1)
-    s_2 = generate_blocks(x_2)
 
-    return size(intersect(s_1, s_2), 1) / size(union(s_1, s_2), 1)
+    return sum(x_1 .& x_2) / sum(x_1 .| x_2)
 end
