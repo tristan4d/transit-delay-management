@@ -11,6 +11,9 @@ An instance of the Vehicle Scheduling Problem (VSP).
 # Fields
 - `n::Int`: the number of trips in the network plus one, representing the depot.
 - `M::Float64`: maximum possible value for propagated delay of any trip.
+- `op_cost::Int`: the cost per hour of service operation.
+- `delay_cost::Int`: the cost per hour that a passenger is delayed.
+- `veh_cost::Int`: the daily cost of adding a new vehicle to the solution.
 - `l::Vector{Distribution}`: normal distribution for expected delays across each trip.
 - `r::Vector{Float64}`: ridership for each trip.
 - `C::Matrix{Float64}`: cost for using arc (i, j) in the VSP network.
@@ -22,6 +25,9 @@ An instance of the Vehicle Scheduling Problem (VSP).
 struct VSPInstance
 	n::Int # number of trips + depot
 	M::Float64 # big-M constraint variable for propagated delay
+	op_cost::Int # $ per hour of operation
+	delay_cost::Int # $ per passenger waiting hour
+	veh_cost::Int # $ per vehicle
 	l::Vector{Distribution} # normal distributions for expected delay for all trips
 	r::Vector{Float64} # ridership for all trips
 	C::Matrix{Float64} # adjacency-cost lists for all trips
@@ -53,7 +59,11 @@ function VSPInstance(
 	randomSeed = 1,
     l::Union{Matrix{Float64}, Vector{Distribution}, Nothing} = nothing, # [μ, σ]
 	r::Union{Vector{Float64}, Nothing} = nothing,
-	averageSpeed::Float64 = 30.0
+	op_cost = 160, # $ per hour of operation
+	delay_cost = 37, # $ per passenger waiting hour
+	veh_cost = 600, # $ per vehicle
+	averageSpeed::Float64 = 30.0,
+	depot_loc = (mean(trips[:, :start_lat]), mean(trips[:, :start_lon]))
 )
 	n = size(trips, 1) + 1
 	delays = Distribution[]
@@ -73,7 +83,7 @@ function VSPInstance(
 		end
 	end
 	C = zeros(Float64, n, n)
-    C[1, 2:end] .= 600 # cost per vehicle
+    C[1, 2:end] .= veh_cost # cost per vehicle
 	B = zeros(Float64, n, n)
 	G = zeros(Bool, n, n)
 	G[1, 2:end] .= 1 # add link from depot to each trip
@@ -81,6 +91,8 @@ function VSPInstance(
 	D = zeros(Float64, n-1, n-1) # deadhead time between start/stop points
 
 	for i ∈ 1:n-1
+		C[1, i] += haversine(depot_loc, (trips[i, :start_lat], trips[i, :start_lon]), 6372.8) / averageSpeed * op_cost
+		C[i, 1] = haversine((trips[i, :stop_lat], trips[i, :stop_lon]), depot_loc, 6372.8) / averageSpeed * op_cost
 		for j ∈ 1:n-1
             i == j && continue
 			timeDiff = trips[j, :start_time] - trips[i, :stop_time]
@@ -93,7 +105,13 @@ function VSPInstance(
 				G[i+1, j+1] = 1 # add link if vehicle can deadhead from i -> j
 				# ensure rational data
                 B[i+1, j+1] = round(timeDiff - distance / averageSpeed; digits = 2)
-                C[i+1, j+1] = round(distance / averageSpeed + timeDiff; digits = 2) * 160 # cost per hour
+				if timeDiff < 3.0
+	                C[i+1, j+1] = round(distance / averageSpeed + timeDiff; digits = 2) * op_cost # cost per hour
+				else
+					d1 = haversine(coords_1, depot_loc, 6372.8)
+					d2 = haversine(depot_loc, coords_2, 6372.8)
+					C[i+1, j+1] = round((d1 + d2) / averageSpeed; digits = 2) * op_cost * 2 # return to depot
+				end
 			end
 		end
 	end
@@ -109,7 +127,7 @@ function VSPInstance(
 		r = getRidership(trips; randomSeed=randomSeed)
 	end
 
-	return VSPInstance(n, M, delays, r, C, B, D, G, trips)
+	return VSPInstance(n, M, op_cost, delay_cost, veh_cost, delays, r, C, B, D, G, trips)
 end
 
 """

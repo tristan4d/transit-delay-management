@@ -270,21 +270,32 @@ function plotVSP_time(
             try
                 start = trips[trip, :stop_time]
                 stop = trips[this_schedule[i+1], :start_time]
-                deadhead = D[trip, this_schedule[i+1]]
-                plot!(
-                    [start, start+deadhead],
-                    [counter, counter];
-                    ls = :solid,
-                    lc = :black,
-                    la = 0.75
-                )
-                plot!(
-                    [start+deadhead, stop],
-                    [counter, counter];
-                    ls = :dash,
-                    lc = :black,
-                    la = 0.25
-                )
+                if stop - start < 3
+                    deadhead = D[trip, this_schedule[i+1]]
+                    plot!(
+                        [start, start+deadhead],
+                        [counter, counter];
+                        ls = :solid,
+                        lc = :black,
+                        la = 0.75,
+                        lw = 2
+                    )
+                    plot!(
+                        [start+deadhead, stop],
+                        [counter, counter];
+                        ls = :solid,
+                        lc = :black,
+                        la = 0.25
+                    )
+                else
+                    plot!(
+                        [start, stop],
+                        [counter, counter];
+                        ls = :dash,
+                        lc = :black,
+                        la = 0.25
+                    )
+                end
             catch
                 nothing
             end
@@ -419,13 +430,16 @@ function generate_blocks(x::Matrix{Bool})
     return schedules
 end
 
-function runTimeAnalysis(sol::MCFSolution, delays::Matrix{Float64})
-    instance = sol.mod.inst
+function runTimeAnalysis(sol::MCFSolution, delays::Matrix{Float64}, percentile = 0.85)
+    trips = copy(sol.mod.inst.trips)
 
-    instance.trips.stop_time .+= mean(delays, dims=2)
+    q = quantile.(eachrow(delays), percentile)
+    trips.stop_time .+= q[2:end]
 
-    mcf_model = MCFModel(instance)
-    mcf_solution = solve!(mcf_model)
+    instance = VSPInstance(trips)
 
-    return mcf_solution
+    rta_model = MCFModel(instance)
+    rta_solution = solve!(rta_model)
+
+    return rta_solution, q
 end

@@ -207,9 +207,10 @@ function getDelays(
     end
 
     trip_lengths = trips.stop_time - trips.start_time
-    dists = Uniform.(0, trip_lengths)
-    μ = rand.(dists).*meanMulti
-    σ = rand.(dists).*stdMulti
+    μ_dists = Uniform.(-trip_lengths, trip_lengths)
+    σ_dists = Uniform.(0.1 * trip_lengths, trip_lengths)
+    μ = rand.(μ_dists).*meanMulti
+    σ = rand.(σ_dists).*stdMulti
 
     delays = Distribution[]
     for (i, tl) in enumerate(trip_lengths)

@@ -59,6 +59,7 @@ delay and cost objectives.
 """
 function VSPModel(
     inst::VSPInstance;
+    L = nothing,
     numScenarios = 100,
     split = 1.0,
     randomSeed = 1,
@@ -86,9 +87,14 @@ function VSPModel(
     C = inst.C
     B = inst.B
     G = inst.G
-    Random.seed!(randomSeed)
-    L = hcat(rand.(inst.l, numScenarios)...)'
-    L = vcat(zeros(Float64, 1, numScenarios), L)
+    if !isnothing(L)
+        numScenarios = size(L, 2)
+
+    else
+        Random.seed!(randomSeed)
+        L = hcat(rand.(inst.l, numScenarios)...)'
+        L = vcat(zeros(Float64, 1, numScenarios), L)
+    end
     n_train = trunc(Int, numScenarios*split)
     train_idx = sample(1:numScenarios, n_train, replace = false)
     L_train = L[:, train_idx]
@@ -124,9 +130,9 @@ function VSPModel(
     @expression(model, delay_expr, sum(r' * s) / n_train)
     @expression(model, cost_expr, sum(C .* x))
     if multiObj
-        @objective(model, Min, [37 * delay_expr, cost_expr])
+        @objective(model, Min, [inst.delay_cost * delay_expr, cost_expr])
     else
-        @objective(model, Min, 37 * delay_expr + cost_expr) # $25 per hour of wait time
+        @objective(model, Min, inst.delay_cost * delay_expr + cost_expr)
     end
 
     return VSPModel(inst, model, numScenarios, n_train, L_train, L_test, x, s)

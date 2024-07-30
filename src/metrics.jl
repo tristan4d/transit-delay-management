@@ -39,7 +39,7 @@ function getSolutionStats(
     for scenario in 1:numScenarios
         this_s[:, scenario] = feasibleDelays(sol.x, L[:, scenario], B)
         if !isnothing(ridership)
-            this_s[2:end, scenario] = this_s[2:end, scenario] .* ridership
+            this_s[2:end, scenario] .*= ridership
         end
     end
     propagated_delays = vec(mean(this_s, dims=2))[2:end]
@@ -95,10 +95,7 @@ function getSolutionStats(
         ])
     end
     
-    cost = sol.objective_value
-    if eltype(sol) == MCFSolution
-        cost += sum(propagated_delays) * 37
-    end
+    cost = sum(sol.mod.inst.C .* x) + sum(propagated_delays) * sol.mod.inst.delay_cost + sum(trips[:, :stop_time] .- trips[:, :start_time]) * sol.mod.inst.op_cost
     
     s_10 = ceil(Int, numScenarios/10)
     return SolutionStats(
