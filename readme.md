@@ -93,7 +93,9 @@ An interesting artifact from this plot is in the performance of the two delay-co
 
 We demonstrate that a relatively small number of scenarios are required to obtain stable results in the stochastically optimized model.  We create 10 different instances with 100 trips for each number of scenario increment from 1-10.  For each trip increment, we optimize three models.  The first is the minimum cost solution to the instance, disregarding delay information.  The sceond is a minimum cost + delay model optimized over the sample mean delay of each trip only.  The third is a minimum cost + delay model optimized over stochastic delays sampled from each trip distribution.  The results are calculated against an unseen sample of delays as to replicate optimizing over historical delay information and performance on real time disruptions.
 
-![scenarios_unseen](imgs/VSP-PD-100-10_1-10-scenarios_unseen.png)
+<p align="center">
+  <img src="imgs/VSP-PD-100-10_1-10-scenarios_unseen.png" />
+</p>
 
 We observe that by ~10 different scenarios, the stochastically optimized model has settled to a steady state in terms of passenger delays, cost, and similarity to the minimum cost solution.  For instances with 30 trips and 50 trips, we saw settling occur at ~3 and ~5 scenarios, respectively.  This suggests that the solution is not changing drastically as we add more scenarios beyond ~10% of the trip total.  As a result, we set the number of scenarios for any instance to 10% of its number of trips.
 
@@ -101,15 +103,17 @@ We observe that by ~10 different scenarios, the stochastically optimized model h
 
 ### Utilization
 
-TODO
+<span style="color:red">TODO</span>
 
 ### Passenger Delay
 
-TODO
+
+<span style="color:red">TODO</span>
 
 ### Cost
 
-TODO
+
+<span style="color:red">TODO</span>
 
 ### Similarity
 
@@ -123,17 +127,22 @@ Run time analysis (RTA) consists of analyzing historical trip run times and adju
 
 First, we consider how these models perform when the variance of trip delays increases.  We allow trip delay distributions to have a maximum variance of 20-100% of their trip length.  We expect the stochastically optimized model to perform the best, in terms of cost, as a large variance will mean many trips are also arriving early as well as very late.  Therefore, the RTA model will likely overcompensate by adding significant run time to each trip which will increase cost.
 
-![rta_std_comparison](imgs/VSP-PD-100-10_10-rta_std_comparison.png)
+<p align="center">
+  <img src="imgs/VSP-PD-100-10_10-rta_std_comparison.png" />
+</p>
 
 Indeed, we see that the stochasically optimized model outperforms the other two in terms of cost.  The RTA model does outperform the others with respect to passenger delays, which makes sense as the travel times for each trip are longer.  In this analysis, a key assumption is that the delay distributions would remain the same, regardless of trip length, meaning we simply shift the mean of each trip delay distribution by the amount of travel time added to that trip.  This is a large assumption.
 
 Next, we consider how these models perform when the mean of trip delays increases.  Similarly, we allow the means to be larger, but we expect the RTA to outperform the others in terms of cost as delays become more extreme.  This is because when delays become extreme across the entire system, it may not be feasible to arrange the trips in a way that avoids large passenger delays.
 
-![rta_mean_comparison](imgs/VSP-PD-100-10_10-rta_mean_comparison.png)
+<p align="center">
+  <img src="imgs/VSP-PD-100-10_10-rta_mean_comparison.png" />
+</p>
 
 Interestingly, we see the stochastically optimized model still has the lowest cost.
 
-**TODO**
+
+**<span style="color:red">TODO</span>**
 
 * excess run time costs may be what is missing
 * looking at average trip passenger delays may be watering down delays - should look at inf norm?
