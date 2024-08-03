@@ -150,7 +150,7 @@ Consider the stochastic delay-aware mathematical model for our problem,
 
 ``` math
 \begin{gather*}
-\min&\sum_{i,j\in V}c_{ij}x_{ij}+\sum_{k\in\mathcal{S},i\in T}r_is_i^k& \\
+\min&\sum_{i,j\in V}c_{ij}x_{ij}+\frac{1}{|\mathcal{S}|}\sum_{k\in\mathcal{S},i\in T}r_is_i^k& \\
 \text{subject to:}&x_{ij}\in\mathbb{Z}_+&\forall i,j,\in V \\
 &s_i^k\geq0&\forall i\in T,k\in\mathcal{S} \\
 &s_i^k\geq\sum_{j\in T}x_{ji}(s_j^k+l_j^k-b_{ji})&\forall i\in T,k\in\mathcal{S} \\
