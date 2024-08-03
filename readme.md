@@ -146,7 +146,7 @@ Again, we see the stochastically optimized model outperforming the others in bot
 
 ### Stochastic Delay Vignette
 
-Consider the mathematical model for our problem,
+Consider the stochastic delay-aware mathematical model for our problem,
 
 ``` math
 \begin{gather*}
@@ -164,10 +164,23 @@ where $s_i^k$ is defined as the amount of time that trip $i$ departs after its s
 Suppose the mean primary delay for all trips is less than or equal to 0, that is
 
 $$
-\frac{1}{|\mathcal{S}|}\sum_{k\in\mathcal{S}}l_i^k\leq0\quad\forall i\in T.
+\frac{1}{|\mathcal{S}|}\sum_{k\in\mathcal{S}}l_i^k=\overline{l}_i\leq0\quad\forall i\in T.
 $$
 
-Should we restrict our model to the scenario including only mean primary delays, then we observe that $s_i^k=0$ is optimal and the model collapses to the minimum cost solution.  However, should we sample the distribution of each trip to build multiple delay scenarios, we will inevitably encouter scenarios with positive primary delays (assuming a normal distribution).  As we have established, the minimum cost solution can perform significantly worse than one which considers delays in terms of delay propagation and cost.  Thus, the naive approach of optimizing over the mean primary delay for all trips is not recommended for developing schedules that are robust to system disruptions.
+Should we restrict our model to the scenario including only mean primary delays,
+
+``` math
+\begin{gather*}
+\min&\sum_{i,j\in V}c_{ij}x_{ij}+\sum_{i\in T}r_is_i& \\
+\text{subject to:}&x_{ij}\in\mathbb{Z}_+&\forall i,j,\in V \\
+&s_i\geq0&\forall i\in T \\
+&s_i\geq\sum_{j\in T}x_{ji}(s_j+\overline{l}_j-b_{ji})&\forall i\in T \\
+&\sum_{j\in V}x_{ij}=\sum_{j\in V}x_{ji}&\forall i\in V \\
+&\sum_{j\in V}x_{ij}=1&\forall i\in T,
+\end{gather*}
+```
+
+ then we observe that $s_i=0$ is optimal and the model collapses to the minimum cost solution.  However, should we sample the distribution of each trip to build multiple delay scenarios, we will inevitably encouter scenarios with positive primary delays (assuming a normal distribution).  As we have established, the minimum cost solution can perform significantly worse than one which considers delays in terms of delay propagation and cost.  Thus, the naive approach of optimizing over the mean primary delay for all trips is not recommended for developing schedules that are robust to system disruptions.
 
 ## References
 
