@@ -148,16 +148,16 @@ Again, we see the stochastically optimized model outperforming the others in bot
 
 Consider the mathematical model for our problem,
 
-$$
-\begin{gathered}
+``` math
+\begin{gather*}
 \min&\sum_{i,j\in V}c_{ij}x_{ij}+\sum_{k\in\mathcal{S},i\in T}r_is_i^k& \\
 \text{subject to:}&x_{ij}\in\mathbb{Z}_+&\forall i,j,\in V \\
 &s_i^k\geq0&\forall i\in T,k\in\mathcal{S} \\
 &s_i^k\geq\sum_{j\in T}x_{ji}(s_j^k+l_j^k-b_{ji})&\forall i\in T,k\in\mathcal{S} \\
 &\sum_{j\in V}x_{ij}=\sum_{j\in V}x_{ji}&\forall i\in V \\
 &\sum_{j\in V}x_{ij}=1&\forall i\in T,
-\end{gathered}
-$$
+\end{gather*}
+```
 
 where $s_i^k$ is defined as the amount of time that trip $i$ departs after its scheduled departure time in scenario $k$.  Note, this cannot be negative as trips are not allowed to depart early.  $l_i^k$ is the primary delay for trip $i$ in scenario $k$.
 
