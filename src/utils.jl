@@ -156,46 +156,22 @@ function subsetGTFS(
     return subset
 end
 
-function primaryDelays(
-    trips::DataFrame;
-    form = 0,
-    meanMulti = 0.1,
-    stdMulti = 0.5,
-    bbox = nothing,
-    shapes = nothing
-)
-    n = size(trips, 1)
-    min_start = minimum(trips.start_time)
-    max_start = maximum(trips.start_time)
-    l = zeros(Float64, n, 2)
-    t = trips[:, :stop_time] - trips[:, :start_time]
+"""
+    getDelays(
+        trips::DataFrame[,
+        randomSeed = nothing,
+        meanMulti = 0.1,
+        stdMulti = 0.5]
+    )
 
-    if form == 0
-        dist = Uniform(min_start, max_start)
-        x = trips.start_time
-    elseif form == 1
-        dist = Chi(1)
-        x = (trips.start_time .- min_start) ./ (max_start - min_start) .* 2
-    elseif form == 2
-        dist = Chi(1)
-        x = ((trips.start_time .- min_start) ./ (max_start - min_start) .- 1) .* (-2)
-    end
 
-    λ = pdf.(dist, x)
-    l[:, 1] = t.*λ.*meanMulti
-    l[:, 2] = t.*stdMulti
+Generates a vector of truncated normal trip delay distributions, one for each trip in `trips`.
 
-    if !isnothing(bbox) && !isnothing(shapes)
-        for i in 1:n
-            if do_paths_intersect(shapes[shapes.shape_id .== trips[i, :shape_id], :shape_pts][1], bbox)
-                l[i, 1] *= 2
-            end
-        end
-    end
-
-    return l
-end
-
+The `trips` DataFrame determines how many distributions are generated.  Distribution means are
+selected randomly between `(-0.1*trip_lengths, trip_lengths*meanMulti)` and standard deviations
+are selected randomly between `(0.1*trip_lengths, trip_lengths.*stdMulti)`.  Distributions are
+truncated with an upper bound of `trip_lengths`.
+"""
 function getDelays(
     trips::DataFrame;
     randomSeed = nothing,
@@ -207,10 +183,10 @@ function getDelays(
     end
 
     trip_lengths = trips.stop_time - trips.start_time
-    μ_dists = Uniform.(-trip_lengths, trip_lengths)
-    σ_dists = Uniform.(0.1 * trip_lengths, trip_lengths)
-    μ = rand.(μ_dists).*meanMulti
-    σ = rand.(σ_dists).*stdMulti
+    μ_dists = Uniform.(-0.1*trip_lengths, trip_lengths*meanMulti)
+    σ_dists = Uniform.(0.1*trip_lengths, trip_lengths.*stdMulti)
+    μ = rand.(μ_dists)
+    σ = rand.(σ_dists)
 
     delays = Distribution[]
     for (i, tl) in enumerate(trip_lengths)
@@ -220,6 +196,18 @@ function getDelays(
     return delays
 end
 
+"""
+    getRidership(
+        trips::DataFrame[,
+        randomSeed = nothing,
+        min = 0,
+        max = 120,]
+    )
+
+Generates a vector representing average ridership across each trip in `trips`.
+
+Each ridership value is selected randomly between `min` and `max`.
+"""
 function getRidership(
     trips::DataFrame;
     randomSeed = nothing,

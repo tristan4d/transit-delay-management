@@ -2,14 +2,39 @@ using DataFrames
 using GeoInterface
 using Statistics
 
+"""
+    SolutionStats
+
+Solution statistics and metrics for minimum cost flow or delay-aware models.
+
+# Fields
+- `sol::Union{VSPSolution, MCFSolution}`: a solution of a VSP instance.
+- `cost::Float64`: cost, in monetary units, of the solution.
+- `vehicle_cost::Float64`: cost, in monetary units, of the fleet.
+- `link_cost::Float64`: cost, in monetary units, of the chosen links.
+- `passenger_cost::Float64`: cost, in monetary units, of the total passenger delay.
+- `service_cost::Float64`: cost, in monetary units, of the service delivered.
+- `μ::Float64`: the mean (passenger) delay per trip.
+- `μ_10::Float64`: the mean (passenger) delay per trip of the worst 10% of instances.
+- `σ::Float64`: the standard deviation of (passenger) delay per trip.
+- `σ_10::Float64`: the standard deviation of (passenger) delay per trip of the worst 10% of instances.
+- `utilization::Float64`: the percent of time spent moving passengers.
+- `deadhead::Float64`: the distance, in minutes, of deadheading in the solution.
+- `metrics::DataFrame`: trip-level metrics.
+"""
 struct SolutionStats
     sol::Union{VSPSolution, MCFSolution}
     cost::Float64
+    vehicle_cost::Float64
+    link_cost::Float64
+    passenger_cost::Float64
+    service_cost::Float64
     μ::Float64
     μ_10::Float64
     σ::Float64
     σ_10::Float64
     utilization::Float64
+    deadhead::Float64
     metrics::DataFrame
 end
 
@@ -22,6 +47,16 @@ function getSolutionStats(
     x = convert(Matrix{Bool}, round.(sol.x))
     schedules = generate_blocks(x)
     n = sol.mod.inst.n
+    op_cost = sol.mod.inst.op_cost
+    delay_cost = sol.mod.inst.delay_cost
+    veh_cost = sol.mod.inst.veh_cost
+    B = sol.mod.inst.B
+    C = sol.mod.inst.C
+    D = sol.mod.inst.D
+    trips = sol.mod.inst.trips
+    propagated_delays = zeros(Float64, n-1)
+    propagated_delay_errs = zeros(Float64, n-1)
+
     if isnothing(delays)
         L = sol.mod.L_train
         numScenarios = sol.mod.n_train
@@ -29,22 +64,17 @@ function getSolutionStats(
         L = delays
         numScenarios = size(delays, 2)
     end
-    
-    B = sol.mod.inst.B
-    D = sol.mod.inst.D
-    propagated_delays = zeros(Float64, n-1)
-    propagated_delay_errs = zeros(Float64, n-1)
-
     this_s = zeros(Float64, n, numScenarios)
+
     for scenario in 1:numScenarios
         this_s[:, scenario] = feasibleDelays(sol.x, L[:, scenario], B)
         if !isnothing(ridership)
             this_s[2:end, scenario] .*= ridership
         end
     end
+
     propagated_delays = vec(mean(this_s, dims=2))[2:end]
     propagated_delay_errs = vec(std(this_s, dims=2))[2:end]
-    trips = sol.mod.inst.trips
     metrics = DataFrame(
         [
             Float64[],
@@ -63,26 +93,28 @@ function getSolutionStats(
             (isnothing(ridership) ? "propagated_delay" : "propagated_passenger_delay"),
             (isnothing(ridership) ? "propagated_delay_err" : "propagated_passenger_delay_err"),
             "trip_distance",
-            "deadhead_distance",
+            "deadhead",
             "geometry"
         ]
     )
 
     total_duration = 0.0
     total_nis_length = 0.0
+    total_deadhead = 0.0
     for schedule in schedules
-        duration = getBlockLength(schedule, trips)
+        duration = getBlockLength(schedule, trips, D)
         total_duration += duration
         num_trips = length(schedule)
-        utilization = 1 - notInServiceLength(schedule, trips) / duration
-        total_nis_length += notInServiceLength(schedule, trips)
+        utilization = 1 - notInServiceLength(schedule, trips, D) / duration
+        total_nis_length += notInServiceLength(schedule, trips, D)
         propagated_delay = mean(propagated_delays[schedule])
         propagated_delay_err = std(propagated_delays[schedule])
         if isnan(propagated_delay_err)
             propagated_delay_err = 0.0
         end
         distance, geometry = getGeometry(schedule, trips, shapes)
-        deadhead_distance = getDeadhead(schedule, D)
+        deadhead = getDeadhead(schedule, D)
+        total_deadhead += deadhead
         push!(metrics, [
             duration,
             num_trips,
@@ -90,45 +122,58 @@ function getSolutionStats(
             propagated_delay,
             propagated_delay_err,
             distance,
-            deadhead_distance,
+            deadhead,
             geometry
         ])
     end
     
-    cost = sum(sol.mod.inst.C .* x) + sum(propagated_delays) * sol.mod.inst.delay_cost + sum(trips[:, :stop_time] .- trips[:, :start_time]) * sol.mod.inst.op_cost
+    vehicle_cost = veh_cost * sum(x[1, :])
+    link_cost = sum(C .* x) - vehicle_cost
+    passenger_cost = sum(propagated_delays) * delay_cost
+    service_cost = sum(propagated_delays ./ ridership .* x[2:end, 1]) * op_cost +
+        sum(mean(L, dims=2) .* x[:, 1]) * op_cost +
+        sum(trips[:, :stop_time] .- trips[:, :start_time]) * op_cost
+
+    cost = vehicle_cost + link_cost + passenger_cost + service_cost
     
     s_10 = ceil(Int, numScenarios/10)
     return SolutionStats(
         sol,
         cost,
+        vehicle_cost,
+        link_cost,
+        passenger_cost,
+        service_cost,
         mean(this_s) * 60,
         mean(sort(this_s, dims=2, rev=true)[:, 1:s_10]) * 60,
         std(this_s) * 60,
         std(sort(this_s, dims=2, rev=true)[:, 1:s_10]) * 60,
-        1 - total_nis_length / total_duration, 
+        1 - total_nis_length / total_duration,
+        total_deadhead * 60,
         metrics
     )
 end
 
 function getDeadhead(s::Vector{Int}, D::Matrix{Float64})
-    distance = 0.0
+    time = 0.0
 
     for i in 1:size(s, 1)-1
-        distance += D[s[i], s[i+1]]
+        time += D[s[i], s[i+1]]
     end
 
-    return distance
+    return time
 end
 
-function getBlockLength(s::Vector{Int}, trips::DataFrame)
+function getBlockLength(s::Vector{Int}, trips::DataFrame, D::Matrix{Float64})
     start = trips[s[1], :start_time]
     stop = trips[s[end], :stop_time]
 
-    return stop - start
+    return stop - start + D[1, s[1]] + D[s[end], 1]
 end
 
-function notInServiceLength(s::Vector{Int}, trips::DataFrame)
-    nis = 0.0
+function notInServiceLength(s::Vector{Int}, trips::DataFrame, D::Matrix{Float64})
+    nis = D[1,s[1]]
+    nis += D[s[end], 1]
 
     for i in 1:length(s)-1
         stop = trips[s[i], :stop_time]

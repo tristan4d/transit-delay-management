@@ -62,43 +62,6 @@ The key difference is that ridership is not stochastic in the current model, tho
 
 We are able to specify a depot location `(lat, lon)` and if none is specified, we select the mean starting location of all trips as the depot location.  This somewhat mimics the preference for agencies to position their depots closest to where most of their trips operate.
 
-## Why Use Stochastic Delays?
-
-### Stochastic Delays
-
-We demonstrate the value of considering stochastic delays by analyzing VSP instances with a range of trips.  We create 10 different instances for each trip increment from 25-100.  For each trip increment, we optimize three models.  The first is the minimum cost solution to the instance, disregarding delay information.  The sceond is a minimum cost + delay model optimized over the sample mean delay of each trip only.  The third is a minimum cost + delay model optimized over stochastic delays sampled from each trip distribution.  The results are calculated against an unseen sample of delays as to replicate optimizing over historical delay information and performance on real time disruptions.
-
-![overfit_unseen](imgs/VSP-PD-100-10_10-overfit_unseen.png)
-
-We observe that as the number of trips increases, both the minimum cost and mean trip delay models overfits to its training data and the delays that occur when considering the unseen sample grow.  The performance on the stochastically optimized model, however, maintains low delays on both the mean trip delay and stochastic delay scenarios.
-
-We also observe that the costs for the minimum cost and mean trip delay models are quite similar, indicating that the minimum cost solution is sufficient if one were only concerned with the mean trip delays in a system with reasonable on-time-performance.  The stochastically optimized model exhibits lower passenger delays on the unseen data, as expected, as well lower cost.  This highlights the models overall superiority when considering network disruptions.
-
-Furthermore, the similarity to the minimum cost solution decreases in both delay considering models.  This makes sense as when we add trips, the number of feasible schedules grows and the solution which minimizes some delay is likely to be different than that of the minimum cost solution.  Lastly, we note that the utilization, as compared to the minimum cost solution, is nearly identical and this suggests these models are not adding much buffer time in the vehicle schedules.
-
-### Robustness to Delay
-
-Using an instance with 100 trips, we incrementally increase the variance of the delay distribution for each trip.  The variance increments are prescribed by setting the standard deviation equal to percentages of trip length and range from 10-100%.  For each variance increment, we optimize three models.  The first is the minimum cost solution to the instance, disregarding delay information.  The sceond is a minimum cost + delay model optimized over the sample mean delay of each trip only.  The third is a minimum cost + delay model optimized over stochastic delays sampled from each trip distribution.  The results are calculated against an unseen sample of delays as to replicate optimizing over historical delay information and performance on real time disruptions.
-
-
-![delay_spectrum_unseen](imgs/VSP-PD-100-10_10-delay_spectrum_unseen.png)
-
-We note that the minimum cost solutions and the model optimized over sample mean delays only perform very similarly.  This makes sense as the mean delays are small and therefore the model does not need to adjust the schedules much to accommodate these minor disruptions.  Interestingly, as the variance increases, we see these two models have a high similarity of ~80%.  When the variance is low, the sampled scenarios will be closer to the mean of each distribution and therefore the sample mean is likely to be positive.  However, when the variance is high and because we truncate the distributions at a maximum value of 1x trip length, the sample means are likely to be negative which means all trips arrive early.  This is exactly the same as finding the minimum cost solution which may explain why we see this high similarity at large variances.
-
-The model optimized over the stochastic delay sample performs much better, when considering delays on any given day.  Even when delay distributions have high variance, the average passenger delay per trip and the cost of service are kept low.  We see the similarity with the minimum cost solution degrades and the utilization dips slightly.  This suggests that the stochstically optimized model is selecting higher cost links with more buffer time as this is less expensive than the large passenger delays that are occuring in the other solutions.
-
-An interesting artifact from this plot is in the performance of the two delay-considering models on the sample mean instance.  We see that the stochastically optimized model has lower passenger delays even though the other model was trained specifically on this data.  The overall cost for the model trained on sample means is lower than the stochastically optimized model, though, which indicates the former is selecting cheaper links at the expense of causing more passenger delays.  This tradeoff results in lower costs when considering the sample mean delays only, but we observe how this impacts individual scenarios through the stochastic cost.
-
-### How Many Scenarios?
-
-We demonstrate that a relatively small number of scenarios are required to obtain stable results in the stochastically optimized model.  We create 10 different instances with 100 trips for each number of scenario increment from 1-10.  For each trip increment, we optimize three models.  The first is the minimum cost solution to the instance, disregarding delay information.  The sceond is a minimum cost + delay model optimized over the sample mean delay of each trip only.  The third is a minimum cost + delay model optimized over stochastic delays sampled from each trip distribution.  The results are calculated against an unseen sample of delays as to replicate optimizing over historical delay information and performance on real time disruptions.
-
-<p align="center">
-  <img src="imgs/VSP-PD-100-10_1-10-scenarios_unseen.png" />
-</p>
-
-We observe that by ~10 different scenarios, the stochastically optimized model has settled to a steady state in terms of passenger delays, cost, and similarity to the minimum cost solution.  For instances with 30 trips and 50 trips, we saw settling occur at ~3 and ~5 scenarios, respectively.  This suggests that the solution is not changing drastically as we add more scenarios beyond ~10% of the trip total.  As a result, we set the number of scenarios for any instance to 10% of its number of trips.
-
 ## Metrics
 
 ### Utilization
@@ -119,33 +82,65 @@ We observe that by ~10 different scenarios, the stochastically optimized model h
 
 We calculate the similarity of two schedules using the `compareSchedules` function.  This returns the intersection over the union of the adjacency matrices for each schedule.  Schedules which share the same routing of vehicles between trips will have higher similarity.
 
+## Why Use Stochastic Delays?
+
+### Stochastic Delays
+
+We demonstrate the value of considering stochastic delays by analyzing two VSP instances while varying the trip delay distributions.  We create 10 different instances for distribution parameter increment and optimize three models.  The first is the minimum cost solution to the instance, disregarding delay information.  The second is a delay-aware model optimized over the sample mean of each trip delay, only.  The third is a delay-aware model optimized stochastically over the sampled trip delays.  The results are calculated against an unseen sample of delays as to replicate optimizing over historical delay information and performance on real time disruptions.
+
+#### Instance 1: AM Peak
+
+This instance is comprised of a set of key routes in the Nanaimo network, sharing three terminus locations.  We look at all trips between the start of the planning horizon until 10 am which creates an instance with 88 trips.
+
+<p align="center">
+  <img src="imgs/VSP-PD-am_peak-10_10-overfit_unseen_std.png" width="800vw"/>
+</p>
+
+We observe that as the trip delay variance increases, the minimum cost solution accrues large passenger delays which begins to increase costs drastically.  The solution optimized over mean delays follows a similar trend, however we can see that the amount of deadheading is slightly larger and the similarity with the minimum cost solution is ~60%.  Therefore, this model is, indeed, selecting links that are reducing passenger delay, as can be seen by the slightly lower passenger costs, yet the adjustments are minimal.  This can be seen by the relatively flat vehicle, link, and service costs.  The stochastically optimized model maintains the lowest overall cost by sacrificing some link and vehicle cost.  We can see the vehicle and link costs begin to increase as the delay variance grows, indicating these solutions are favoring schedules with more vehicles and more buffer time to absorb delays.  Furthermore, this solution has the highest deadheading time.
+
+#### Instance 2: AM Short
+
+The second instance considers some local routes in the Nanaimo network which have many unique terminus locations, yet share a common terminus on one end.  We look at all trips between the start of the planning horizon until 12 pm which creates an instance with 55 trips.
+
+<p align="center">
+  <img src="imgs/VSP-PD-am_short-10_10-overfit_unseen_std.png" width="800vw"/>
+</p>
+
+We observe the same trends as for instance 1, suggesting that the stochastically optimized model is successful in reducing cost over the minimum cost and mean delay-aware models.
+
 ## Comparison to Other Solutions
 
 ### Run Time Analysis
 
 Run time analysis (RTA) consists of analyzing historical trip run times and adjusting the planned travel time to align with current conditions.  Common practice is to set the planned travel time to allow a given percentile of historical trips to have been made on time - typically a value of 85% is used.  In this section, we simulate performing a RTA on each instance by increasing travel times for all trips to accommodate the 85th percentile of delay scenarios.  We then re-optimize this newly created instance as a minimum cost flow model.
 
-First, we consider how these models perform when the variance of trip delays increases.  We allow trip delay distributions to have a maximum variance of 20-100% of their trip length.  We expect the stochastically optimized model to perform the best, in terms of cost, as a large variance will mean many trips are also arriving early as well as very late.  Therefore, the RTA model will likely overcompensate by adding significant run time to each trip which will increase cost.
+We consider how these models perform when the variance and mean of trip delays change.  We expect the stochastically optimized model to perform the best, in terms of cost, when variance changes as a large variance will mean many trips are also arriving early as well as very late.  Therefore, the RTA model will likely overcompensate by adding significant run time to each trip which will increase cost.  The RTA model is expected to perform better when the mean changes as this likely indicates the planned trip length is no longer suitable.
+
+In the generation of RTA solutions, we assume that the delay distributions would remain the same, regardless of trip length, meaning we simply shift the mean of each trip delay distribution by the amount of travel time added to that trip.  Also, we only adjust the planned arrival time in the original timetable, however in a true implementation of RTA, the timetable would also be revised to accommodate planned transfers and other scheduling requirements.  These are large assumptions which limit the comparisons in this section.
+
+#### Instance 1: AM Peak
 
 <p align="center">
-  <img src="imgs/VSP-PD-100-10_10-rta_std_comparison.png" />
+  <img src="imgs/VSP-PD-am_peak-10_10-rta_comparison_std.png" width="800vw"/>
 </p>
-
-Indeed, we see that the stochasically optimized model outperforms the other two in terms of cost.  The RTA model does outperform the others with respect to passenger delays, which makes sense as the travel times for each trip are longer.  In this analysis, a key assumption is that the delay distributions would remain the same, regardless of trip length, meaning we simply shift the mean of each trip delay distribution by the amount of travel time added to that trip.  This is a large assumption.
-
-Next, we consider how these models perform when the mean of trip delays increases.  Similarly, we allow the means to be larger, but we expect the RTA to outperform the others in terms of cost as delays become more extreme.  This is because when delays become extreme across the entire system, it may not be feasible to arrange the trips in a way that avoids large passenger delays.
 
 <p align="center">
-  <img src="imgs/VSP-PD-100-10_10-rta_mean_comparison.png" />
+  <img src="imgs/VSP-PD-am_peak-10_10-rta_comparison_mean.png" width="800vw"/>
 </p>
 
-Interestingly, we see the stochastically optimized model still has the lowest cost.
+We see that the stochasically optimized model outperforms the other two in terms of cost in both comparisons.  The RTA model does outperform the others with respect to passenger cost, which makes sense as the travel times for each trip are longer.
 
+#### Instance 2: AM Short
 
-**<span style="color:red">TODO</span>**
+<p align="center">
+  <img src="imgs/VSP-PD-am_short-10_10-rta_comparison_std.png" width="800vw"/>
+</p>
 
-* excess run time costs may be what is missing
-* looking at average trip passenger delays may be watering down delays - should look at inf norm?
+<p align="center">
+  <img src="imgs/VSP-PD-am_short-10_10-rta_comparison_mean.png" width="800vw"/>
+</p>
+
+Again, we see the stochastically optimized model outperforming the others in both comparisons.  It may be that the 85th percentile is too conservative and it would be interesting to compare with other percentiles.  Moreover, the assumptions listed above limit the validity of the RTA solution.  Because the costs are quite close it is possible that the RTA solution would be less costly with a revision of the original timetable.
 
 ## Miscellaneous
 

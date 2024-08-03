@@ -43,7 +43,11 @@ end
 		randomSeed = 1,
 		l::Union{Matrix{Float64}, Vector{Distribution}, Nothing} = nothing,
 		r::Union{Vector{Float64}, Nothing} = nothing,
-		averageSpeed::Float64 = 30.0
+		op_cost = 160,
+		delay_cost = 37,
+		veh_cost = 600,
+		averageSpeed::Float64 = 30.0,
+		depot_loc = (mean(trips[:, :start_lat]), mean(trips[:, :start_lon]))
 		]
 	)
 
@@ -51,8 +55,14 @@ Create a VSPInstance object from the `trips` DataFrame.
 
 Expected trip delays may be specified by `l` which is a vector of distributions or 
 a matrix with mean delays in the first columnand standard deviations in the second.
-Trip ridership may be specified by `r`.  Possible deadheads are determined by
-haversine distance and `averageSpeed`.
+Trip ridership may be specified by `r`.  The costing of solutions may be modified with
+
+- `op_cost`, the cost of one hour of service operations;
+- `delay_cost`, the cost of an hour of passenger delay; and
+- `veh_cost`, the daily cost of adding a new vehicle to the solution.
+
+Possible deadheads are determined by haversine distance and `averageSpeed`.  A `depot_loc`
+may be specified, and defaults to the average starting location of all trips in `trips`.
 """
 function VSPInstance(
 	trips::DataFrame;
@@ -91,8 +101,10 @@ function VSPInstance(
 	D = zeros(Float64, n-1, n-1) # deadhead time between start/stop points
 
 	for i ∈ 1:n-1
-		C[1, i] += haversine(depot_loc, (trips[i, :start_lat], trips[i, :start_lon]), 6372.8) / averageSpeed * op_cost
-		C[i, 1] = haversine((trips[i, :stop_lat], trips[i, :stop_lon]), depot_loc, 6372.8) / averageSpeed * op_cost
+		D[1, i] = haversine(depot_loc, (trips[i, :start_lat], trips[i, :start_lon]), 6372.8) / averageSpeed 
+		D[i, 1] = haversine((trips[i, :stop_lat], trips[i, :stop_lon]), depot_loc, 6372.8) / averageSpeed 
+		C[1, i] += D[1, i] * op_cost
+		C[i, 1] = D[i, 1] * op_cost
 		for j ∈ 1:n-1
             i == j && continue
 			timeDiff = trips[j, :start_time] - trips[i, :stop_time]
@@ -110,6 +122,7 @@ function VSPInstance(
 				else
 					d1 = haversine(coords_1, depot_loc, 6372.8)
 					d2 = haversine(depot_loc, coords_2, 6372.8)
+					D[i, j] = (d1+d2) / averageSpeed
 					C[i+1, j+1] = round((d1 + d2) / averageSpeed; digits = 2) * op_cost * 2 # return to depot
 				end
 			end

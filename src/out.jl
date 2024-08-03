@@ -255,6 +255,29 @@ function plotVSP_time(
         annot_xs = []
         annot_ys = []
         annots = []
+
+        plot!(
+            [
+                trips[this_schedule[1], :start_time]-D[1, this_schedule[1]],
+                trips[this_schedule[1], :start_time]
+            ],
+            [counter, counter];
+            ls = :solid,
+            lc = :black,
+            la = 0.75,
+            lw = 2
+        )
+        plot!(
+            [
+                trips[this_schedule[end], :stop_time],
+                trips[this_schedule[end], :stop_time]+D[this_schedule[end], 1]
+            ],
+            [counter, counter];
+            ls = :solid,
+            lc = :black,
+            la = 0.75,
+            lw = 2
+        )
         for (i, trip) ∈ enumerate(this_schedule)
             plot!(
                 [trips[trip, :start_time], trips[trip, :stop_time]],
@@ -285,7 +308,7 @@ function plotVSP_time(
                         [counter, counter];
                         ls = :solid,
                         lc = :black,
-                        la = 0.25
+                        la = 0.75
                     )
                 else
                     plot!(
@@ -293,7 +316,7 @@ function plotVSP_time(
                         [counter, counter];
                         ls = :dash,
                         lc = :black,
-                        la = 0.25
+                        la = 0.75
                     )
                 end
             catch
@@ -358,7 +381,7 @@ function plotVSP_map(metrics::DataFrame; schedule = nothing)
     endpoints = Leaflet.Layer[]
     # n = size(metrics, 1)
     # block_cmap = range(colorant"yellow", stop=colorant"blue", length=n)
-    block_cmap = palette(:tab20)
+    block_cmap = palette(:roma50)
     lats = []
     lons = []
     for (i, geom) in enumerate(metrics.geometry)

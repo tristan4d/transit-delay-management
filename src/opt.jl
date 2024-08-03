@@ -127,12 +127,16 @@ function VSPModel(
     # require each trip is completed
     @constraint(model, [i = 2:n], sum(x[:, i]) == 1)
     # minimize total propagated delay and link costs
-    @expression(model, delay_expr, sum(r' * s) / n_train)
+    @expression(
+        model,
+        delay_expr,
+        sum(inst.delay_cost * r' * s + inst.op_cost * x[2:end, 1]' * (s .+ L_train[2:end, :])) / n_train
+    )
     @expression(model, cost_expr, sum(C .* x))
     if multiObj
-        @objective(model, Min, [inst.delay_cost * delay_expr, cost_expr])
+        @objective(model, Min, [delay_expr, cost_expr])
     else
-        @objective(model, Min, inst.delay_cost * delay_expr + cost_expr)
+        @objective(model, Min, delay_expr + cost_expr)
     end
 
     return VSPModel(inst, model, numScenarios, n_train, L_train, L_test, x, s)
