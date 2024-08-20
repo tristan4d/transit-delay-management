@@ -183,7 +183,7 @@ where $t$ is the amount by which the travel time for trip $i$ will be adjusted. 
 The question remains: how does this compare to the delay-aware model?  In this scenario, with two trips, the dominant cost will be the number of vehicles required to operate the service.  Using the I-RTA, we would require an additional vehicle when
 
 $$
-t^*=\mu+z\sigma>b.
+\hat{t}=\mu+z\sigma>b.
 $$
 
 If $\mu=0$ and $b=\sigma=5$, then we require an additional vehicle when $z>1$ and $r_1\gtrsim 27$.
