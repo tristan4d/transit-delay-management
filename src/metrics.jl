@@ -10,10 +10,13 @@ Solution statistics and metrics for minimum cost flow or delay-aware models.
 # Fields
 - `sol::Union{VSPSolution, MCFSolution}`: a solution of a VSP instance.
 - `cost::Float64`: cost, in monetary units, of the solution.
+- `cost_err::Float64`: cost confidence interval, in monetary units, of the solution.
 - `vehicle_cost::Float64`: cost, in monetary units, of the fleet.
 - `link_cost::Float64`: cost, in monetary units, of the chosen links.
 - `passenger_cost::Float64`: cost, in monetary units, of the total passenger delay.
+- `passenger_cost_err::Float64`: cost confidence interval, in monetary units, of the total passenger delay.
 - `service_cost::Float64`: cost, in monetary units, of the service delivered.
+- `service_cost_err::Float64`: cost confidence interval, in monetary units, of the service delivered.
 - `μ::Float64`: the mean (passenger) delay per trip.
 - `μ_10::Float64`: the mean (passenger) delay per trip of the worst 10% of instances.
 - `σ::Float64`: the standard deviation of (passenger) delay per trip.
@@ -25,10 +28,13 @@ Solution statistics and metrics for minimum cost flow or delay-aware models.
 struct SolutionStats
     sol::Union{VSPSolution, MCFSolution}
     cost::Float64
+    cost_err::Float64
     vehicle_cost::Float64
     link_cost::Float64
     passenger_cost::Float64
+    passenger_cost_err::Float64
     service_cost::Float64
+    service_cost_err::Float64
     μ::Float64
     μ_10::Float64
     σ::Float64
@@ -53,6 +59,7 @@ function getSolutionStats(
     B = sol.mod.inst.B
     C = sol.mod.inst.C
     D = sol.mod.inst.D
+    V = sol.mod.inst.V
     trips = sol.mod.inst.trips
     propagated_delays = zeros(Float64, n-1)
     propagated_delay_errs = zeros(Float64, n-1)
@@ -130,20 +137,28 @@ function getSolutionStats(
     vehicle_cost = veh_cost * sum(x[1, :])
     link_cost = sum(C .* x) - vehicle_cost
     passenger_cost = sum(propagated_delays) * delay_cost
+    passenger_cost_err = sum(propagated_delay_errs) * delay_cost
     service_cost = sum(propagated_delays ./ ridership .* x[2:end, 1]) * op_cost +
+        sum(propagated_delays' * (V .* x)[2:end, 2:end]) * op_cost +
         sum(mean(L, dims=2) .* x[:, 1]) * op_cost +
         sum(trips[:, :stop_time] .- trips[:, :start_time]) * op_cost
+    service_cost_err = sum(propagated_delay_errs ./ ridership .* x[2:end, 1]) * op_cost +
+        sum(propagated_delay_errs' * (V .* x)[2:end, 2:end]) * op_cost
 
     cost = vehicle_cost + link_cost + passenger_cost + service_cost
+    cost_err = passenger_cost_err + service_cost_err
     
     s_10 = ceil(Int, numScenarios/10)
     return SolutionStats(
         sol,
         cost,
+        cost_err,
         vehicle_cost,
         link_cost,
         passenger_cost,
+        passenger_cost_err,
         service_cost,
+        service_cost_err,
         mean(this_s) * 60,
         mean(sort(this_s, dims=2, rev=true)[:, 1:s_10]) * 60,
         std(this_s) * 60,

@@ -19,6 +19,7 @@ An instance of the Vehicle Scheduling Problem (VSP).
 - `C::Matrix{Float64}`: cost for using arc (i, j) in the VSP network.
 - `B::Matrix{Float64}`: buffer time on arc (i, j) in the VSP network.
 - `D::Matrix{Float64}`: D[i, j] is the distance from the end of trip i to the start of trip j.
+- `V::Matrix{Bool}`: 1 if arc (i, j) returns to the depot in between.
 - `G::Matrix{Bool}`: 1 if arc (i, j) is usable in the VSP network, 0 otherwise.
 - `trips::DataFrame`: the trips DataFrame, see `loadGTFS` in utils.jl.
 """
@@ -33,6 +34,7 @@ struct VSPInstance
 	C::Matrix{Float64} # adjacency-cost lists for all trips
 	B::Matrix{Float64} # buffer time between all trips
 	D::Matrix{Float64} # D[i, j] is the deadhead time from the end of trip i to the start of trip j
+	V::Matrix{Bool} # virtual depot trips
 	G::Matrix{Bool} # connections between trips (G[i,j] = 1 if arc i -> j in G)
 	trips::DataFrame # trips dataframe
 end
@@ -99,6 +101,7 @@ function VSPInstance(
 	G[1, 2:end] .= 1 # add link from depot to each trip
 	G[2:end, 1] .= 1 # add link from each trip to depot
 	D = zeros(Float64, n-1, n-1) # deadhead time between start/stop points
+	V = zeros(Bool, n, n)
 
 	for i ∈ 1:n-1
 		D[1, i] = haversine(depot_loc, (trips[i, :start_lat], trips[i, :start_lon]), 6372.8) / averageSpeed 
@@ -120,6 +123,7 @@ function VSPInstance(
 				if timeDiff < 3.0
 	                C[i+1, j+1] = round(distance / averageSpeed + timeDiff; digits = 2) * op_cost # cost per hour
 				else
+					V[i+1, j+1] = 1
 					d1 = haversine(coords_1, depot_loc, 6372.8)
 					d2 = haversine(depot_loc, coords_2, 6372.8)
 					D[i, j] = (d1+d2) / averageSpeed
@@ -140,7 +144,7 @@ function VSPInstance(
 		r = getRidership(trips; randomSeed=randomSeed)
 	end
 
-	return VSPInstance(n, M, op_cost, delay_cost, veh_cost, delays, r, C, B, D, G, trips)
+	return VSPInstance(n, M, op_cost, delay_cost, veh_cost, delays, r, C, B, D, V, G, trips)
 end
 
 """

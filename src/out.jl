@@ -453,8 +453,15 @@ function generate_blocks(x::Matrix{Bool})
     return schedules
 end
 
-function runTimeAnalysis(sol::MCFSolution, delays::Matrix{Float64}, percentile = 0.85)
+function runTimeAnalysis(sol::MCFSolution, delays::Matrix{Float64}; percentile = nothing)
     trips = copy(sol.mod.inst.trips)
+    if isnothing(percentile)
+        delay_cost = sol.mod.inst.delay_cost
+        op_cost = sol.mod.inst.op_cost
+        r = sol.mod.inst.r
+        percentile = max.(1 .- op_cost ./ delay_cost ./ r, 0)
+        pushfirst!(percentile, 0)
+    end
 
     q = quantile.(eachrow(delays), percentile)
     trips.stop_time .+= q[2:end]

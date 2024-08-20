@@ -51,6 +51,7 @@ function loadGTFS(path::String)
     trips_df = @chain trips begin
         @subset (:service_id .== 2015) # manual filter for Nanaimo
         # @subset (:service_id .== 2086) # manual filter for Cranbrook
+        @rename :direction = :direction_id
         @transform (@byrow :route_id =
             routes[routes.route_id.==:route_id, :].route_short_name[1])
         @transform(
@@ -78,6 +79,7 @@ function loadGTFS(path::String)
                 :trip_id,
                 :shape_id,
                 :distance,
+                :direction,
                 :start_time,
                 :stop_time,
                 :start_lat,
@@ -111,6 +113,33 @@ function loadGTFS(path::String)
     )
 
     return trips_df, shapes_df
+end
+
+"""
+    loadHistoricalData(path::String)
+
+Load and historical data located at `path` with respect to the current directory.
+"""
+function loadHistoricalData(path::String)
+    # load dataframe for historical data
+    folder = joinpath(@__DIR__(), path)
+    df = CSV.read(joinpath(folder, "nanaimo_ridership_fall_2023.csv"), DataFrames.DataFrame)
+
+    holidays = [
+        Date(2023, 9, 4), # labour day
+        Date(2023, 9, 30), # truth and reconciliation
+        Date(2023, 10, 9), # thanksgiving
+        Date(2023, 11, 11), # remembrance day
+    ]
+
+    df.direction = [(d in ["Inbound", "North"] ? false : true) for d in df.direction]
+    df.is_holiday = [date in holidays for date in df.date]
+    df.is_weekday = Dates.dayofweek.(df.date) .< 5
+    df.planned_start_hour = Dates.hour.(df.planned_start_time)
+    df[df.planned_start_hour .== 0, :planned_start_hour] .= 24;
+    df.primary_delay_hours = (df.end_delay_seconds - df.start_delay_seconds) / 3600
+
+    return df
 end
 
 """
@@ -178,6 +207,7 @@ function getDelays(
     meanMulti = 0.1,
     stdMulti = 0.5
 )
+    delays = Distribution[]
     if !isnothing(randomSeed)
         Random.seed!(randomSeed)
     end
@@ -188,12 +218,44 @@ function getDelays(
     μ = rand.(μ_dists)
     σ = rand.(σ_dists)
 
-    delays = Distribution[]
     for (i, tl) in enumerate(trip_lengths)
   		push!(delays, truncated(Normal(μ[i], σ[i]), upper=tl))
     end
 
     return delays
+end
+
+function getHistoricalDelays(
+    trips::DataFrame,
+    data::DataFrame,
+    n::Int;
+    randomSeed = nothing,
+    multi = 1.0
+)
+    L = zeros(Float64, size(trips, 1)+1, n)
+    if !isnothing(randomSeed)
+        Random.seed!(randomSeed)
+    end
+
+    for (i, trip) in enumerate(eachrow(trips))
+        subset = data.primary_delay_hours[
+            (data.route .== trip.route_id) .&
+            (data.planned_start_hour .== floor(trip.start_time)) .&
+            (data.direction .== trip.direction)
+        ]
+
+        if isempty(subset)
+            print(trip)
+        end
+
+        if n > length(subset)
+            L[i+1, :] = sample(subset, n, replace=true)
+        else
+            L[i+1, :] = sample(subset, n, replace=false)
+        end
+    end
+
+    return L .* multi
 end
 
 """
@@ -222,6 +284,25 @@ function getRidership(
     dist = Uniform(min, max)
 
     return rand(dist, n)
+end
+
+function getHistoricalRidership(
+    trips::DataFrame,
+    data::DataFrame
+)
+    r = Float64[]
+
+    for trip in eachrow(trips)
+        subset = data.total_boardings[
+            (data.route .== trip.route_id) .&
+            (data.planned_start_hour .== floor(trip.start_time)) .&
+            (data.direction .== trip.direction)
+        ]
+
+        push!(r, mean(subset))
+    end
+
+    return r
 end
 
 # Function to check if two line segments (p1, q1) and (p2, q2) intersect

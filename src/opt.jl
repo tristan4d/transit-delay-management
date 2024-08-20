@@ -89,7 +89,6 @@ function VSPModel(
     G = inst.G
     if !isnothing(L)
         numScenarios = size(L, 2)
-
     else
         Random.seed!(randomSeed)
         L = hcat(rand.(inst.l, numScenarios)...)'
@@ -130,7 +129,7 @@ function VSPModel(
     @expression(
         model,
         delay_expr,
-        sum(inst.delay_cost * r' * s + inst.op_cost * x[2:end, 1]' * (s .+ L_train[2:end, :])) / n_train
+        sum(inst.delay_cost * r' * s) / n_train
     )
     @expression(model, cost_expr, sum(C .* x))
     if multiObj
