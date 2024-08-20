@@ -4,6 +4,32 @@ Tristan Ford
 
 *The University of British Columbia*
 
+## Models
+
+### Minimum Cost Flow
+
+``` math
+\begin{gather*}
+\min_{\mathbf{x}} \quad & \sum_{(i, j) \in \mathcal{E}} c_{ij} x_{ij} \tag{1.1}\\
+\text{s.t.} \quad & \sum_{j \in \mathtt{In}(i)} x_{ji} = 1 & \forall i \in \mathcal{T}, \tag{1.2}\\
+& \sum_{j \in \mathtt{In}(i)} x_{ji} - \sum_{j \in \mathtt{Out}(i)} x_{ij} = 0 & \forall i \in \mathcal{T},  \tag{1.3}\\
+& x_{i, j} \in \{0, 1\} & \forall (i, j) \in \mathcal{E},  \tag{1.4}
+\end{gather*}
+```
+
+### Stochastic Delay-Aware
+
+``` math
+\begin{gather*}
+\min_{\mathbf{x}, \mathbf{y}} \quad & \sum_{(i, j) \in \mathcal{E}} c_{ij} x_{ij} + \frac{1}{S}\sum_{s=1}^S \sum_{i \in \mathcal{T}} h_i y_i^s \tag{2.1}\\
+\text{s.t.} \quad & \sum_{j \in \mathtt{In}(i)} x_{ji} = 1 & \forall i \in \mathcal{T}, \tag{2.2}\\
+& \sum_{j \in \mathtt{In}(i)} x_{ji} - \sum_{j \in \mathtt{Out}(i)} x_{ij} = 0 & \forall i \in \mathcal{T},  \tag{2.3}\\
+& y_i^s \geq \sum_{j \in \mathtt{In}(i)} (y_j^s + \ell_j^s - b_{ji})x_{ji} & \forall i \in \mathcal{T}, s \in \mathcal{S},  \tag{2.4}\\
+& x_{i, j} \in \{0, 1\} & \forall (i, j) \in \mathcal{E},  \tag{2.5}\\
+& y_i^s \geq 0 & \forall i \in \mathcal{T}, s \in \mathcal{S}. \tag{2.6}
+\end{gather*}
+```
+
 ## Costs
 
 ### Vehicles
@@ -38,11 +64,27 @@ To create this graph, we rely upon General Transit Feed Specification (GTFS) dat
 
 #### Delays
 
-TODO: when received from BC Transit
+We have partnered with [BC Transit](https://www.bctransit.com/choose-transit-system/) to obtain historical delay data.  This information provides, on a trip-level, primary delay and secondary delay.  We observe that, despite some trips completing early which corresponds to negative primary delays, there are very few trips which depart early.  This highlights the operational requirement for trips to not start early as this can be frustrating for customers.  Furthermore, though the relative percent of trips with large secondary delays is low, there are still many instances where these large delays do occur.  This data spans roughly three months and each large secondary delay can reasonably be considered an instance where operational interventions are required.
+
+<p align="center">
+  <img src="imgs/weekday_delay_histogram.png" width="800vw"/>
+</p>
+
+<p align="center">
+  <img src="imgs/weekday_secondary_delay_dotplot.png" width="800vw"/>
+</p>
 
 #### Ridership
 
-TODO: when received from BC Transit
+We have partnered with [BC Transit](https://www.bctransit.com/choose-transit-system/) to obtain historical delay data.  This information provides, on a trip-level, the total boardings.  Frequent Transit and Local Transit (Ridership) routes are typically higher frequency and ridership routes.  While Local Transit (Coverage) and Targeted services typically have lower frequencies and ridership.  We also can see that this system has fairly strong ridership spikes in the pm peak, however the morning peak is not as pronounced.  This is a fairly common trend that many transit systems have seen post-pandemic as work-from-home and flexible schedules typically allow for people to avoid the am peak.
+
+<p align="center">
+  <img src="imgs/weekday_boardings_violin.png" width="800vw"/>
+</p>
+
+<p align="center">
+  <img src="imgs/weekday_hourly_boardings.png" width="800vw"/>
+</p>
 
 ### Generated
 
@@ -75,112 +117,84 @@ We are able to specify a depot location `(lat, lon)` and if none is specified, w
 
 ### Cost
 
-
 <span style="color:red">TODO</span>
 
 ### Similarity
 
 We calculate the similarity of two schedules using the `compareSchedules` function.  This returns the intersection over the union of the adjacency matrices for each schedule.  Schedules which share the same routing of vehicles between trips will have higher similarity.
 
-## Why Use Stochastic Delays?
+## Why Not Just Use the Mean?
 
-### Stochastic Delays
+### Vignette
 
-We demonstrate the value of considering stochastic delays by analyzing two VSP instances while varying the trip delay distributions.  We create 10 different instances for distribution parameter increment and optimize three models.  The first is the minimum cost solution to the instance, disregarding delay information.  The second is a delay-aware model optimized over the sample mean of each trip delay, only.  The third is a delay-aware model optimized stochastically over the sampled trip delays.  The results are calculated against an unseen sample of delays as to replicate optimizing over historical delay information and performance on real time disruptions.
-
-#### Instance 1: AM Peak
-
-This instance is comprised of a set of key routes in the Nanaimo network, sharing three terminus locations.  We look at all trips between the start of the planning horizon until 10 am which creates an instance with 88 trips.
-
-<p align="center">
-  <img src="imgs/VSP-PD-am_peak-10_10-overfit_unseen_std.png" width="800vw"/>
-</p>
-
-We observe that as the trip delay variance increases, the minimum cost solution accrues large passenger delays which begins to increase costs drastically.  The solution optimized over mean delays follows a similar trend, however we can see that the amount of deadheading is slightly larger and the similarity with the minimum cost solution is ~60%.  Therefore, this model is, indeed, selecting links that are reducing passenger delay, as can be seen by the slightly lower passenger costs, yet the adjustments are minimal.  This can be seen by the relatively flat vehicle, link, and service costs.  The stochastically optimized model maintains the lowest overall cost by sacrificing some link and vehicle cost.  We can see the vehicle and link costs begin to increase as the delay variance grows, indicating these solutions are favoring schedules with more vehicles and more buffer time to absorb delays.  Furthermore, this solution has the highest deadheading time.
-
-#### Instance 2: AM Short
-
-The second instance considers some local routes in the Nanaimo network which have many unique terminus locations, yet share a common terminus on one end.  We look at all trips between the start of the planning horizon until 12 pm which creates an instance with 55 trips.
-
-<p align="center">
-  <img src="imgs/VSP-PD-am_short-10_10-overfit_unseen_std.png" width="800vw"/>
-</p>
-
-We observe the same trends as for instance 1, suggesting that the stochastically optimized model is successful in reducing cost over the minimum cost and mean delay-aware models.
-
-## Comparison to Other Solutions
-
-### Run Time Analysis
-
-Run time analysis (RTA) consists of analyzing historical trip run times and adjusting the planned travel time to align with current conditions.  Common practice is to set the planned travel time to allow a given percentile of historical trips to have been made on time - typically a value of 85% is used.  In this section, we simulate performing a RTA on each instance by increasing travel times for all trips to accommodate the 85th percentile of delay scenarios.  We then re-optimize this newly created instance as a minimum cost flow model.
-
-We consider how these models perform when the variance and mean of trip delays change.  We expect the stochastically optimized model to perform the best, in terms of cost, when variance changes as a large variance will mean many trips are also arriving early as well as very late.  Therefore, the RTA model will likely overcompensate by adding significant run time to each trip which will increase cost.  The RTA model is expected to perform better when the mean changes as this likely indicates the planned trip length is no longer suitable.
-
-In the generation of RTA solutions, we assume that the delay distributions would remain the same, regardless of trip length, meaning we simply shift the mean of each trip delay distribution by the amount of travel time added to that trip.  Also, we only adjust the planned arrival time in the original timetable, however in a true implementation of RTA, the timetable would also be revised to accommodate planned transfers and other scheduling requirements.  These are large assumptions which limit the comparisons in this section.
-
-#### Instance 1: AM Peak
-
-<p align="center">
-  <img src="imgs/VSP-PD-am_peak-10_10-rta_comparison_std.png" width="800vw"/>
-</p>
-
-<p align="center">
-  <img src="imgs/VSP-PD-am_peak-10_10-rta_comparison_mean.png" width="800vw"/>
-</p>
-
-We see that the stochasically optimized model outperforms the other two in terms of cost in both comparisons.  The RTA model does outperform the others with respect to passenger cost, which makes sense as the travel times for each trip are longer.
-
-#### Instance 2: AM Short
-
-<p align="center">
-  <img src="imgs/VSP-PD-am_short-10_10-rta_comparison_std.png" width="800vw"/>
-</p>
-
-<p align="center">
-  <img src="imgs/VSP-PD-am_short-10_10-rta_comparison_mean.png" width="800vw"/>
-</p>
-
-Again, we see the stochastically optimized model outperforming the others in both comparisons.  It may be that the 85th percentile is too conservative and it would be interesting to compare with other percentiles.  Moreover, the assumptions listed above limit the validity of the RTA solution.  Because the costs are quite close it is possible that the RTA solution would be less costly with a revision of the original timetable.
-
-## Miscellaneous
-
-### Stochastic Delay Vignette
-
-Consider the stochastic delay-aware mathematical model for our problem,
-
-``` math
-\begin{gather*}
-\min&\sum_{i,j\in V}c_{ij}x_{ij}+\frac{1}{|\mathcal{S}|}\sum_{k\in\mathcal{S},i\in T}r_is_i^k& \\
-\text{subject to:}&x_{ij}\in\mathbb{Z}_+&\forall i,j,\in V \\
-&s_i^k\geq0&\forall i\in T,k\in\mathcal{S} \\
-&s_i^k\geq\sum_{j\in T}x_{ji}(s_j^k+l_j^k-b_{ji})&\forall i\in T,k\in\mathcal{S} \\
-&\sum_{j\in V}x_{ij}=\sum_{j\in V}x_{ji}&\forall i\in V \\
-&\sum_{j\in V}x_{ij}=1&\forall i\in T,
-\end{gather*}
-```
-
-where $s_i^k$ is defined as the amount of time that trip $i$ departs after its scheduled departure time in scenario $k$.  Note, this cannot be negative as trips are not allowed to depart early.  $l_i^k$ is the primary delay for trip $i$ in scenario $k$.
+Consider the stochastic delay-aware mathematical model for our problem, where $y_i^s$ is defined as the amount of time that trip $i$ departs after its scheduled departure time in scenario $s$.  Note, this cannot be negative as trips are not allowed to depart early.  $l_i^s$ is the primary delay for trip $i$ in scenario $s$.
 
 Suppose the mean primary delay for all trips is less than or equal to 0, that is
 
 $$
-\frac{1}{|\mathcal{S}|}\sum_{k\in\mathcal{S}}l_i^k=\overline{l}_i\leq0\quad\forall i\in T.
+\frac{1}{\mathcal{S}}\sum_{s=1}^{\mathcal{S}}\ell_i^s=\overline{\ell}_i\leq0\quad\forall i\in\mathcal{T}.
 $$
 
 Should we restrict our model to the scenario including only mean primary delays,
 
 ``` math
 \begin{gather*}
-\min&\sum_{i,j\in V}c_{ij}x_{ij}+\sum_{i\in T}r_is_i& \\
-\text{subject to:}&x_{ij}\in\mathbb{Z}_+&\forall i,j,\in V \\
-&s_i\geq0&\forall i\in T \\
-&s_i\geq\sum_{j\in T}x_{ji}(s_j+\overline{l}_j-b_{ji})&\forall i\in T \\
-&\sum_{j\in V}x_{ij}=\sum_{j\in V}x_{ji}&\forall i\in V \\
-&\sum_{j\in V}x_{ij}=1&\forall i\in T,
+\min_{\mathbf{x}, \mathbf{y}} \quad & \sum_{(i, j) \in \mathcal{E}} c_{ij} x_{ij} + \sum_{i \in \mathcal{T}} h_i y_i \\
+\text{s.t.} \quad & \sum_{j \in \mathtt{In}(i)} x_{ji} = 1 & \forall i \in \mathcal{T}, \\
+& \sum_{j \in \mathtt{In}(i)} x_{ji} - \sum_{j \in \mathtt{Out}(i)} x_{ij} = 0 & \forall i \in \mathcal{T}, \\
+& y_i \geq \sum_{j \in \mathtt{In}(i)} (y_j + \overline{\ell}_j - b_{ji})x_{ji} = \sum_{j \in \mathtt{In}(i)} (y_j - b_{ji})x_{ji} & \forall i \in \mathcal{T}, \\
+& x_{i, j} \in \{0, 1\} & \forall (i, j) \in \mathcal{E}, \\
+& y_i^s \geq 0 & \forall i \in \mathcal{T}, s \in \mathcal{S}.
 \end{gather*}
 ```
 
- then we observe that $s_i=0$ is optimal and the model collapses to the minimum cost solution.  However, should we sample the distribution of each trip to build multiple delay scenarios, we will inevitably encouter scenarios with positive primary delays (assuming a normal distribution).  As we have established, the minimum cost solution can perform significantly worse than one which considers delays in terms of delay propagation and cost.  Thus, the naive approach of optimizing over the mean primary delay for all trips is not recommended for developing schedules that are robust to system disruptions.
+ then we observe that $y_i=0$ is optimal, as all buffer times of feasible connections are positive, and the model collapses to the minimum cost solution.  However, consider two linked trips, $(i, j)$, in this minimum cost solution.  Let $l_i$ be a random variable representing the primary delay experienced on trip $i$.  Disregarding the effects of delay propagation, the expected secondary delay for trip $j$ is
+
+ $$
+\mathbb{E}[y_j]=\mathbb{E}[\max\{l_i-b_{ij}, 0\}]=\mathbb{E}[l_i-b_{ij}\mid l_i>b_{ij}]P(l_i>b_{ij}).
+ $$
+
+ If $l_i\sim N(\mu,\sigma^2)$ with probability density function, $f$, then
+
+ $$
+\mathbb{E}[y_j]=\int_{x>b_{ij}}xf(x)dx>0.
+ $$
+
+Thus, even without delay propagation effects, we can expect a non-zero passeneger delay across all trips.  Moreover, as the minimum cost flow model will choose links with short buffer times, this value may be considerable.  Of course, the shape of the distribution is also an important factor.  For reference, with a cost of $600 per vehicle, $37 per hour of passenger waiting time, and assuming 20 passengers per trip, a network with 50 trips would only require 1 minute of delay on each trip to equal the cost of adding a new vehicle to the fleet.
+
+### Computation
+
+<span style="color:red">TODO</span>
+
+## Comparison with Run Time Analysis
+
+Run Time Analysis (RTA) is a common practice within transit agencies to adjust travel times to current traffic patterns.  For a given trip, historical travel times are analyzed and a new travel time is prescribed that allows for a given percentile of the historical trips to be completed on time - typically the 85th percentile is used.  In rare cases, this may result in shorter travel times.
+
+### Vignette
+
+We propose a slightly more intelligent form of the RTA process which identifies an optimal percentile to minimize costs for each trip.  We label this problem I-RTA.  Consider two trips $i$ and $j$ separated by buffer time $b$ and share a common terminus (no deadheading required).  Let $\ell$ be a random variable representing the primary delay for trip $i$.  $c$ and $h$ represent the cost per hour of service operation and the cost per hour of passenger delay, respectively.  $r_i$ and $r_j$ are the average ridership values for trips $i$ and $j$, respectively. Then we may formulate the I-RTA for trip $i$ as
+
+$$
+\min_{t\geq\mathbb{E}[\ell]}\quad ct+hr_i\mathbb{E}[\max\{\ell-t,0\}],
+$$
+
+where $t$ is the amount by which the travel time for trip $i$ will be adjusted.  We require $t\geq\mathbb{E}[\ell]$ for practical reasons.  This problem is similar to the [newsvendor model](https://en.wikipedia.org/wiki/Newsvendor_model), and we find that $t^*=\max\{\mathbb{E}[\ell],F^{-1}(1-\frac{c}{hr_i})\}$, where $F$ is the cumulative density function for $\ell$.  If $\ell\sim N(\mu,\sigma^2)$, then $t^*>\mu$ if $r_i>\frac{2c}{h}\approx 8.65$.
+
+The question remains: how does this compare to the delay-aware model?  In this scenario, with two trips, the dominant cost will be the number of vehicles required to operate the service.  Using the I-RTA, we would require an additional vehicle when
+
+$$
+t^*=\mu+z\sigma>b.
+$$
+
+If $\mu=0$ and $b=\sigma=5$, then we require an additional vehicle when $z>1$ and $r_1\gtrsim 27$.
+
+Using the delay-aware model, if the secondary delay of trip $j$ exceeds the cost of adding another vehicle then we may improve the solution by adding one.  However, this requires more than 16 hours of passenger delay.  Even if $r_j=100$, we would still require an average secondary delay of roughly 10 minutes to justify adding another vehicle.  This may only occur if trip $i$ has severe delay issues, at which point scheduling is likely not the best solution.
+
+Therefore, we show that the delay-aware solution is able to reduce operational costs by trading off passenger delay.  Furthermore, the delay-aware solution considers interactions between all scheduled trips, while the I-RTA is miopic in its optimization.  This will exacerbate the savings yielded through application of the delay-aware solution across large networks.
+
+### Computation
+
+<span style="color:red">TODO</span>
 
 ## References
 
