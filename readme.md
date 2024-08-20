@@ -178,7 +178,7 @@ $$
 \min_{t\geq\mathbb{E}[\ell]}\quad ct+hr_i\mathbb{E}[\max\{\ell-t,0\}],
 $$
 
-where $t$ is the amount by which the travel time for trip $i$ will be adjusted.  We require $t\geq\mathbb{E}[\ell]$ for practical reasons.  This problem is similar to the [newsvendor model](https://en.wikipedia.org/wiki/Newsvendor_model), and we find that $t^*=\max\{\mathbb{E}[\ell],F^{-1}(1-\frac{c}{hr_i})\}$, where $F$ is the cumulative density function for $\ell$.  If $\ell\sim N(\mu,\sigma^2)$, then $t^*>\mu$ if $r_i>\frac{2c}{h}\approx 8.65$.
+where $t$ is the amount by which the travel time for trip $i$ will be adjusted.  We require $t\geq\mathbb{E}[\ell]$ for practical reasons.  This problem is similar to the [newsvendor model](https://en.wikipedia.org/wiki/Newsvendor_model), and we find that $\hat{t}=\max\{\mathbb{E}[\ell],F^{-1}(1-\frac{c}{hr_i})\}$, where $F$ is the cumulative density function for $\ell$.  If $\ell\sim N(\mu,\sigma^2)$, then $\hat{t}>\mu$ if $r_i>\frac{2c}{h}\approx 8.65$.
 
 The question remains: how does this compare to the delay-aware model?  In this scenario, with two trips, the dominant cost will be the number of vehicles required to operate the service.  Using the I-RTA, we would require an additional vehicle when
 
