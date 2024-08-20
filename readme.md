@@ -151,7 +151,7 @@ Should we restrict our model to the scenario including only mean primary delays,
  then we observe that $y_i=0$ is optimal, as all buffer times of feasible connections are positive, and the model collapses to the minimum cost solution.  However, consider two linked trips, $(i, j)$, in this minimum cost solution.  Let $l_i$ be a random variable representing the primary delay experienced on trip $i$.  Disregarding the effects of delay propagation, the expected secondary delay for trip $j$ is
 
  $$
-\mathbb{E}[y_j]=\mathbb{E}[\max\{l_i-b_{ij}, 0\}]=\mathbb{E}[l_i-b_{ij}\mid l_i>b_{ij}]P(l_i>b_{ij}).
+\mathbb{E}[y_j]=\mathbb{E}[\max\left(l_i-b_{ij}, 0\right)]=\mathbb{E}[l_i-b_{ij}\mid l_i>b_{ij}]P(l_i>b_{ij}).
  $$
 
  If $l_i\sim N(\mu,\sigma^2)$ with probability density function, $f$, then
@@ -175,10 +175,10 @@ Run Time Analysis (RTA) is a common practice within transit agencies to adjust t
 We propose a slightly more intelligent form of the RTA process which identifies an optimal percentile to minimize costs for each trip.  We label this problem I-RTA.  Consider two trips $i$ and $j$ separated by buffer time $b$ and share a common terminus (no deadheading required).  Let $\ell$ be a random variable representing the primary delay for trip $i$.  $c$ and $h$ represent the cost per hour of service operation and the cost per hour of passenger delay, respectively.  $r_i$ and $r_j$ are the average ridership values for trips $i$ and $j$, respectively. Then we may formulate the I-RTA for trip $i$ as
 
 $$
-\min_{t\geq\mathbb{E}[\ell]}\quad ct+hr_i\mathbb{E}[\max\{\ell-t,0\}],
+\min_{t\geq\mathbb{E}[\ell]}\quad ct+hr_i\mathbb{E}[\max\left(\ell-t,0\right)],
 $$
 
-where $t$ is the amount by which the travel time for trip $i$ will be adjusted.  We require $t\geq\mathbb{E}[\ell]$ for practical reasons.  This problem is similar to the [newsvendor model](https://en.wikipedia.org/wiki/Newsvendor_model), and we find that $\hat{t}=\max\{\mathbb{E}[\ell],F^{-1}(1-\frac{c}{hr_i})\}$, where $F$ is the cumulative density function for $\ell$.  If $\ell\sim N(\mu,\sigma^2)$, then $\hat{t}>\mu$ if $r_i>\frac{2c}{h}\approx 8.65$.
+where $t$ is the amount by which the travel time for trip $i$ will be adjusted.  We require $t\geq\mathbb{E}[\ell]$ for practical reasons.  This problem is similar to the [newsvendor model](https://en.wikipedia.org/wiki/Newsvendor_model), and we find that $\hat{t}=\max\left(\mathbb{E}[\ell],F^{-1}(1-\frac{c}{hr_i})\right)$, where $F$ is the cumulative density function for $\ell$.  If $\ell\sim N(\mu,\sigma^2)$, then $\hat{t}>\mu$ if $r_i>\frac{2c}{h}\approx 8.65$.
 
 The question remains: how does this compare to the delay-aware model?  In this scenario, with two trips, the dominant cost will be the number of vehicles required to operate the service.  Using the I-RTA, we would require an additional vehicle when
 
