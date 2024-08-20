@@ -144,7 +144,7 @@ Should we restrict our model to the scenario including only mean primary delays,
 & \sum_{j \in \mathtt{In}(i)} x_{ji} - \sum_{j \in \mathtt{Out}(i)} x_{ij} = 0 & \forall i \in \mathcal{T}, \\
 & y_i \geq \sum_{j \in \mathtt{In}(i)} (y_j + \overline{\ell}_j - b_{ji})x_{ji} = \sum_{j \in \mathtt{In}(i)} (y_j - b_{ji})x_{ji} & \forall i \in \mathcal{T}, \\
 & x_{i, j} \in \{0, 1\} & \forall (i, j) \in \mathcal{E}, \\
-& y_i^s \geq 0 & \forall i \in \mathcal{T}, s \in \mathcal{S}.
+& y_i \geq 0 & \forall i \in \mathcal{T}.
 \end{gather*}
 ```
 
