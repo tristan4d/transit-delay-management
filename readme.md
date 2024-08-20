@@ -10,10 +10,10 @@ Tristan Ford
 
 ``` math
 \begin{gather*}
-\min_{\mathbf{x}} \quad & \sum_{(i, j) \in \mathcal{E}} c_{ij} x_{ij} \tag{1.1}\\
-\text{s.t.} \quad & \sum_{j \in \mathtt{In}(i)} x_{ji} = 1 & \forall i \in \mathcal{T}, \tag{1.2}\\
-& \sum_{j \in \mathtt{In}(i)} x_{ji} - \sum_{j \in \mathtt{Out}(i)} x_{ij} = 0 & \forall i \in \mathcal{T},  \tag{1.3}\\
-& x_{i, j} \in \{0, 1\} & \forall (i, j) \in \mathcal{E},  \tag{1.4}
+\tag{1.1}\min_{\mathbf{x}} \quad & \sum_{(i, j) \in \mathcal{E}} c_{ij} x_{ij}\\
+\tag{1.2}\text{s.t.} \quad & \sum_{j \in \mathtt{In}(i)} x_{ji} = 1 & \forall i \in \mathcal{T},\\
+\tag{1.3}& \sum_{j \in \mathtt{In}(i)} x_{ji} - \sum_{j \in \mathtt{Out}(i)} x_{ij} = 0 & \forall i \in \mathcal{T},\\
+\tag{1.4}& x_{i, j} \in \{0, 1\} & \forall (i, j) \in \mathcal{E},
 \end{gather*}
 ```
 
