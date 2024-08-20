@@ -10,10 +10,10 @@ Tristan Ford
 
 ``` math
 \begin{gather*}
-\tag{1.1}\min_{\mathbf{x}} \quad & \sum_{(i, j) \in \mathcal{E}} c_{ij} x_{ij}\\
-\tag{1.2}\text{s.t.} \quad & \sum_{j \in \mathtt{In}(i)} x_{ji} = 1 & \forall i \in \mathcal{T},\\
-\tag{1.3}& \sum_{j \in \mathtt{In}(i)} x_{ji} - \sum_{j \in \mathtt{Out}(i)} x_{ij} = 0 & \forall i \in \mathcal{T},\\
-\tag{1.4}& x_{i, j} \in \{0, 1\} & \forall (i, j) \in \mathcal{E},
+\min_{\mathbf{x}} \quad & \sum_{(i, j) \in \mathcal{E}} c_{ij} x_{ij}\\
+\text{s.t.} \quad & \sum_{j \in \mathtt{In}(i)} x_{ji} = 1 & \forall i \in \mathcal{T},\\
+& \sum_{j \in \mathtt{In}(i)} x_{ji} - \sum_{j \in \mathtt{Out}(i)} x_{ij} = 0 & \forall i \in \mathcal{T},\\
+& x_{i, j} \in \{0, 1\} & \forall (i, j) \in \mathcal{E},
 \end{gather*}
 ```
 
@@ -21,12 +21,12 @@ Tristan Ford
 
 ``` math
 \begin{gather*}
-\min_{\mathbf{x}, \mathbf{y}} \quad & \sum_{(i, j) \in \mathcal{E}} c_{ij} x_{ij} + \frac{1}{S}\sum_{s=1}^S \sum_{i \in \mathcal{T}} h_i y_i^s \tag{2.1}\\
-\text{s.t.} \quad & \sum_{j \in \mathtt{In}(i)} x_{ji} = 1 & \forall i \in \mathcal{T}, \tag{2.2}\\
-& \sum_{j \in \mathtt{In}(i)} x_{ji} - \sum_{j \in \mathtt{Out}(i)} x_{ij} = 0 & \forall i \in \mathcal{T},  \tag{2.3}\\
-& y_i^s \geq \sum_{j \in \mathtt{In}(i)} (y_j^s + \ell_j^s - b_{ji})x_{ji} & \forall i \in \mathcal{T}, s \in \mathcal{S},  \tag{2.4}\\
-& x_{i, j} \in \{0, 1\} & \forall (i, j) \in \mathcal{E},  \tag{2.5}\\
-& y_i^s \geq 0 & \forall i \in \mathcal{T}, s \in \mathcal{S}. \tag{2.6}
+\min_{\mathbf{x}, \mathbf{y}} \quad & \sum_{(i, j) \in \mathcal{E}} c_{ij} x_{ij} + \frac{1}{S}\sum_{s=1}^S \sum_{i \in \mathcal{T}} h_i y_i^s \\
+\text{s.t.} \quad & \sum_{j \in \mathtt{In}(i)} x_{ji} = 1 & \forall i \in \mathcal{T}, \\
+& \sum_{j \in \mathtt{In}(i)} x_{ji} - \sum_{j \in \mathtt{Out}(i)} x_{ij} = 0 & \forall i \in \mathcal{T},  \\
+& y_i^s \geq \sum_{j \in \mathtt{In}(i)} (y_j^s + \ell_j^s - b_{ji})x_{ji} & \forall i \in \mathcal{T}, s \in \mathcal{S},  \\
+& x_{i, j} \in \{0, 1\} & \forall (i, j) \in \mathcal{E},  \\
+& y_i^s \geq 0 & \forall i \in \mathcal{T}, s \in \mathcal{S}.
 \end{gather*}
 ```
 
