@@ -116,6 +116,9 @@ function VSPModel(
     # force non-existant links to 0
     @constraint(model, [i = 1:n, j = 1:n; !G[i, j]], x[i, j] == 0)
     # variable constraints
+    # nonlinear version
+    # @constraint(model, [i = 1:n-1, j = 1:n_train], s[i, j] >= sum(x[2:end, i+1] .* (s[:, j] .+ L_train[2:end, j] .- B[2:end, i+1])))
+    # linear version
     @constraint(model, [i = 1:n-1, j = 1:n_train], s[i, j] >= sum(ϕ[:, i, j] .+ x[2:end, i+1] .* (L_train[2:end, j] .- B[2:end, i+1])))
     # McCormick constraints for nonlinear variable
     @constraint(model, [i = 1:n-1, j = 1:n-1, k = 1:n_train], ϕ[i, j, k] <= M * x[i+1, j+1])

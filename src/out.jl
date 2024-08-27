@@ -209,13 +209,16 @@ end
 
 Plot the vehicle schedules in `sol` over time.
 
-Colors indicate the block in the original GTFS files.  The number indicates the route
+Colors indicate the secondary passenger delay cost.  The number indicates the route
 number.
 """
 function plotVSP_time(
     sol::Union{VSPSolution, MCFSolution};
+    plot_size = (600, 400),
     delays = nothing,
-    ridership = nothing
+    ridership = nothing,
+    clims = nothing,
+    time_thresh = nothing
     )
     trips = sol.mod.inst.trips
     B = sol.mod.inst.B
@@ -238,18 +241,22 @@ function plotVSP_time(
 
     schedules = generate_blocks(x)
     delay_cmap = reverse(ColorSchemes.roma)
+    if isnothing(clims)
+        clims = (0, maximum(s))
+    end
     time_plot = plot(;
         xlabel="time of day (hrs)",
         ylabel="vehicle schedule",
         yticks=0:sol.numVehicles+1,
-        legend=false,
-        colorbar=true
+        legend=(isnothing(time_thresh) ? false : :outertopright),
+        colorbar=true,
+        size=plot_size
     )
-    # blocks = unique(trips[:, :block_id])
-    # block_cmap = range(colorant"yellow", stop=colorant"blue", length=length(blocks))
     yflip!(true)
 
     counter = 1
+    short_flag = true
+    long_flag = true
     for schedule ∈ schedules
         this_schedule = schedule
         annot_xs = []
@@ -262,6 +269,7 @@ function plotVSP_time(
                 trips[this_schedule[1], :start_time]
             ],
             [counter, counter];
+            label="",
             ls = :solid,
             lc = :black,
             la = 0.75,
@@ -273,22 +281,36 @@ function plotVSP_time(
                 trips[this_schedule[end], :stop_time]+D[this_schedule[end], 1]
             ],
             [counter, counter];
+            label="",
             ls = :solid,
             lc = :black,
             la = 0.75,
             lw = 2
         )
         for (i, trip) ∈ enumerate(this_schedule)
+            trip_long = isnothing(time_thresh) ? false : (trips[trip, :stop_time] - trips[trip, :start_time] > time_thresh)
+            !isnothing(time_thresh) && plot!(
+                [trips[trip, :start_time], trips[trip, :stop_time]],
+                [counter-0.2, counter-0.2];
+                label=(trip_long ? (long_flag ? "> 40 mins" : "") : (short_flag ? "≤ 40 mins" : "")),
+                lc = (trip_long ? :grey15 : :grey75),
+                lw = 10
+            )
             plot!(
                 [trips[trip, :start_time], trips[trip, :stop_time]],
                 [counter, counter];
-                # lc = block_cmap[findfirst(==(trips[trip, :block_id]), blocks)],
-                lc = get(delay_cmap, (s[trip]-minimum(s))/(maximum(s)-minimum(s))),
+                label="",
+                lc = get(delay_cmap, (s[trip]-clims[1])/(clims[2]-clims[1])),
                 lw = 10
             )
+            if trip_long
+                long_flag = false
+            else
+                short_flag = false                
+            end
             push!(annot_xs, (trips[trip, :start_time]+trips[trip, :stop_time])/2)
-            push!(annot_ys, counter-0.25)
-            push!(annots, Plots.text(trips[trip, :route_id], :black, :center, 4))
+            push!(annot_ys, counter)
+            push!(annots, Plots.text(trips[trip, :route_id], 4, :hcenter, :vcenter, :white))
 
             try
                 start = trips[trip, :stop_time]
@@ -298,6 +320,7 @@ function plotVSP_time(
                     plot!(
                         [start, start+deadhead],
                         [counter, counter];
+                        label="",
                         ls = :solid,
                         lc = :black,
                         la = 0.75,
@@ -306,6 +329,7 @@ function plotVSP_time(
                     plot!(
                         [start+deadhead, stop],
                         [counter, counter];
+                        label="",
                         ls = :solid,
                         lc = :black,
                         la = 0.75
@@ -314,6 +338,7 @@ function plotVSP_time(
                     plot!(
                         [start, stop],
                         [counter, counter];
+                        label="",
                         ls = :dash,
                         lc = :black,
                         la = 0.75
@@ -331,11 +356,12 @@ function plotVSP_time(
     ylims!(0, counter)
 
     gr()
-    l = @layout [a{0.95w} b]
     cmap = cgrad(delay_cmap)
-    p2 = heatmap(
+    heatmap!(
         rand(2,2),
-        clims=(minimum(s)*60, maximum(s)*60),
+        inset=bbox(0.075, 0.15, 0.05, 0.6, :bottom, :right),
+        subplot = 2,
+        clims=(clims[1]*60, clims[2]*60),
         framestyle=:none,
         c=cmap,
         cbar=true,
@@ -343,7 +369,8 @@ function plotVSP_time(
         colorbar_title=(isnothing(ridership) ? "delay (mins)" : "passenger delay (passenger ⋅ mins)")
     )
 
-    return plot(time_plot, p2, layout=l)
+    # return plot(time_plot, p2, layout=l)
+    return time_plot
 end
 
 """

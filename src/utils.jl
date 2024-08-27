@@ -2,6 +2,7 @@ using CSV
 using Dates
 using DataFrames
 using DataFramesMeta
+using Distances
 using Distributions
 using LinearAlgebra
 using Random
@@ -51,6 +52,7 @@ function loadGTFS(path::String)
     trips_df = @chain trips begin
         @subset (:service_id .== 2015) # manual filter for Nanaimo
         # @subset (:service_id .== 2086) # manual filter for Cranbrook
+        # @subset (:service_id .== 593) # manual filter for Victoria
         @rename :direction = :direction_id
         @transform (@byrow :route_id =
             routes[routes.route_id.==:route_id, :].route_short_name[1])
@@ -101,6 +103,7 @@ function loadGTFS(path::String)
         
         # extract shape_dist_traveled
         dist_traveled = maximum(shape.shape_dist_traveled) / 1000 # km
+        # dist_traveled = sum([haversine(lat_lon_tuples[i], lat_lon_tuples[i+1], 6372.8) for i in 1:length(lat_lon_tuples)-1])
         
         push!(shape_pts, lat_lon_tuples)
         push!(shape_dist_traveled, dist_traveled)
@@ -122,8 +125,8 @@ Load and historical data located at `path` with respect to the current directory
 """
 function loadHistoricalData(path::String)
     # load dataframe for historical data
-    folder = joinpath(@__DIR__(), path)
-    df = CSV.read(joinpath(folder, "nanaimo_ridership_fall_2023.csv"), DataFrames.DataFrame)
+    file = joinpath(@__DIR__(), path)
+    df = CSV.read(file, DataFrames.DataFrame)
 
     holidays = [
         Date(2023, 9, 4), # labour day
@@ -132,12 +135,32 @@ function loadHistoricalData(path::String)
         Date(2023, 11, 11), # remembrance day
     ]
 
+    is_holiday = [date in holidays for date in df.date]
+    is_weekday = Dates.dayofweek.(df.date) .< 5
+    df = df[.!is_holiday .& is_weekday, :]
     df.direction = [(d in ["Inbound", "North"] ? false : true) for d in df.direction]
-    df.is_holiday = [date in holidays for date in df.date]
-    df.is_weekday = Dates.dayofweek.(df.date) .< 5
     df.planned_start_hour = Dates.hour.(df.planned_start_time)
     df[df.planned_start_hour .== 0, :planned_start_hour] .= 24;
     df.primary_delay_hours = (df.end_delay_seconds - df.start_delay_seconds) / 3600
+
+    grouped_df = DataFrames.groupby(df, [:route, :planned_start_hour, :direction])
+    combined_df = combine(
+        grouped_df,
+        :total_boardings => mean => :ridership_μ,
+        :total_boardings => std => :ridership_σ,
+        :primary_delay_hours => mean => :primary_μ,
+        :start_delay_seconds => mean => :secondary_μ,
+        :primary_delay_hours => std => :primary_σ,
+        :start_delay_seconds => std => :secondary_σ
+    )
+
+    for trip in eachrow(df)
+        for row in eachrow(combined_df)
+            if trip.route == row.route && trip.planned_start_hour == row.planned_start_hour && trip.direction == row.direction
+                trip.primary_delay_hours += max(-row.primary_μ, 0)
+            end
+        end
+    end
 
     return df
 end
