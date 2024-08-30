@@ -59,10 +59,7 @@ delay and cost objectives.
 """
 function VSPModel(
     inst::VSPInstance;
-    L = nothing,
-    numScenarios = 100,
-    split = 1.0,
-    randomSeed = 1,
+    L_train = nothing,
     warmStart = nothing,
     isInt = true,
     multiObj = false,
@@ -82,22 +79,16 @@ function VSPModel(
     set_attribute(model, "OutputFlag", outputFlag)
     set_attribute(model, "TimeLimit", timeLimit)
     n = inst.n
+    if isnothing(L_train)
+        L_train = inst.L_train
+    end
+    n_train = size(L_train, 2)
+    L_test = inst.L_test
     r = inst.r
     M = inst.M
     C = inst.C
     B = inst.B
     G = inst.G
-    if !isnothing(L)
-        numScenarios = size(L, 2)
-    else
-        Random.seed!(randomSeed)
-        L = hcat(rand.(inst.l, numScenarios)...)'
-        L = vcat(zeros(Float64, 1, numScenarios), L)
-    end
-    n_train = trunc(Int, numScenarios*split)
-    train_idx = sample(1:numScenarios, n_train, replace = false)
-    L_train = L[:, train_idx]
-    L_test = L[:, Not(train_idx)]
 
     # decision variable for arc i -> j
     if isInt
@@ -106,8 +97,10 @@ function VSPModel(
         @variable(model, x[1:n, 1:n] >= 0)
     end
     # variable for propagated delay at trip i
+    @variable(model, d[1:n-1, 1:n_train] >= 0)
+    # variable for end of trip delay at trip i
     @variable(model, s[1:n-1, 1:n_train] >= 0)
-    # nonlinear variable x_ij * s_j
+    # nonlinear variable x_ij * d_j
     @variable(model, ϕ[1:n-1, 1:n-1, 1:n_train] >= 0)
     # warm start with provided solution
     if !isnothing(warmStart)
@@ -117,13 +110,15 @@ function VSPModel(
     @constraint(model, [i = 1:n, j = 1:n; !G[i, j]], x[i, j] == 0)
     # variable constraints
     # nonlinear version
-    # @constraint(model, [i = 1:n-1, j = 1:n_train], s[i, j] >= sum(x[2:end, i+1] .* (s[:, j] .+ L_train[2:end, j] .- B[2:end, i+1])))
+    # @constraint(model, [i = 1:n-1, j = 1:n_train], d[i, j] >= sum(x[2:end, i+1] .* (d[:, j] .+ L_train[2:end, j] .- B[2:end, i+1])))
     # linear version
-    @constraint(model, [i = 1:n-1, j = 1:n_train], s[i, j] >= sum(ϕ[:, i, j] .+ x[2:end, i+1] .* (L_train[2:end, j] .- B[2:end, i+1])))
+    @constraint(model, [i = 1:n-1, j = 1:n_train], d[i, j] >= sum(ϕ[:, i, j] .+ x[2:end, i+1] .* (L_train[2:end, j] .- B[2:end, i+1])))
     # McCormick constraints for nonlinear variable
     @constraint(model, [i = 1:n-1, j = 1:n-1, k = 1:n_train], ϕ[i, j, k] <= M * x[i+1, j+1])
-    @constraint(model, [i = 1:n-1, j = 1:n-1, k = 1:n_train], ϕ[i, j, k] <= s[i, k])
-    @constraint(model, [i = 1:n-1, j = 1:n-1, k = 1:n_train], ϕ[i, j, k] >= s[i, k] - M * (1 - x[i+1, j+1]))
+    @constraint(model, [i = 1:n-1, j = 1:n-1, k = 1:n_train], ϕ[i, j, k] <= d[i, k])
+    @constraint(model, [i = 1:n-1, j = 1:n-1, k = 1:n_train], ϕ[i, j, k] >= d[i, k] - M * (1 - x[i+1, j+1]))
+    # end of trip delay
+    @constraint(model, [i = 1:n-1, j = 1:n_train], s[i, j] >= d[i, j] + L_train[i+1, j])    
     # flow constraint
     @constraint(model, [i = 1:n], sum(x[i, :]) - sum(x[:, i]) == 0)
     # require each trip is completed
@@ -141,7 +136,7 @@ function VSPModel(
         @objective(model, Min, delay_expr + cost_expr)
     end
 
-    return VSPModel(inst, model, numScenarios, n_train, L_train, L_test, x, s)
+    return VSPModel(inst, model, size(L_train, 2) + size(L_test, 2), n_train, L_train, L_test, x, s)
 end
 
 """

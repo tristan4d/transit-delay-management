@@ -4,6 +4,7 @@ using DataFrames
 using DataFramesMeta
 using Distances
 using Distributions
+using JLD2
 using LinearAlgebra
 using Random
 
@@ -50,17 +51,17 @@ function loadGTFS(path::String)
 
     # create trip dataframe ordered by block_id and start_time
     trips_df = @chain trips begin
-        @subset (:service_id .== 2015) # manual filter for Nanaimo
+        # @subset (:service_id .== 2015) # manual filter for Nanaimo
         # @subset (:service_id .== 2086) # manual filter for Cranbrook
-        # @subset (:service_id .== 593) # manual filter for Victoria
+        @subset (:service_id .== 593) # manual filter for Victoria
         @rename :direction = :direction_id
         @transform (@byrow :route_id =
             routes[routes.route_id.==:route_id, :].route_short_name[1])
-        @transform(
-            @byrow :distance = Float32(
-                last(times[times.trip_id.==:trip_id, :]).shape_dist_traveled / 1000, # convert to km
-            )
-        )
+        # @transform(
+        #     @byrow :distance = Float32(
+        #         last(times[times.trip_id.==:trip_id, :]).shape_dist_traveled / 1000, # convert to km
+        #     )
+        # )
         @transform (@byrow :start_time =
             string2time(first(times[times.trip_id.==:trip_id, :]).arrival_time))
         @transform (@byrow :stop_time =
@@ -80,7 +81,7 @@ function loadGTFS(path::String)
                 :route_id,
                 :trip_id,
                 :shape_id,
-                :distance,
+                # :distance,
                 :direction,
                 :start_time,
                 :stop_time,
@@ -102,8 +103,8 @@ function loadGTFS(path::String)
         lat_lon_tuples = [(row.shape_pt_lon, row.shape_pt_lat) for row in eachrow(shape)]
         
         # extract shape_dist_traveled
-        dist_traveled = maximum(shape.shape_dist_traveled) / 1000 # km
-        # dist_traveled = sum([haversine(lat_lon_tuples[i], lat_lon_tuples[i+1], 6372.8) for i in 1:length(lat_lon_tuples)-1])
+        # dist_traveled = maximum(shape.shape_dist_traveled) / 1000 # km
+        dist_traveled = sum([haversine(lat_lon_tuples[i], lat_lon_tuples[i+1], 6372.8) for i in 1:length(lat_lon_tuples)-1])
         
         push!(shape_pts, lat_lon_tuples)
         push!(shape_dist_traveled, dist_traveled)
@@ -123,7 +124,7 @@ end
 
 Load and historical data located at `path` with respect to the current directory.
 """
-function loadHistoricalData(path::String)
+function loadHistoricalData(path::String; normalize = false)
     # load dataframe for historical data
     file = joinpath(@__DIR__(), path)
     df = CSV.read(file, DataFrames.DataFrame)
@@ -136,28 +137,33 @@ function loadHistoricalData(path::String)
     ]
 
     is_holiday = [date in holidays for date in df.date]
+    if eltype(df.date) != Dates.Date
+        df.date = Dates.Date.(df.date, dateformat"m/d/y")
+    end
     is_weekday = Dates.dayofweek.(df.date) .< 5
     df = df[.!is_holiday .& is_weekday, :]
-    df.direction = [(d in ["Inbound", "North"] ? false : true) for d in df.direction]
+    df.direction = [(d in ["Inbound", "North", "Clockwise", "East"] ? false : true) for d in df.direction]
     df.planned_start_hour = Dates.hour.(df.planned_start_time)
     df[df.planned_start_hour .== 0, :planned_start_hour] .= 24;
     df.primary_delay_hours = (df.end_delay_seconds - df.start_delay_seconds) / 3600
 
-    grouped_df = DataFrames.groupby(df, [:route, :planned_start_hour, :direction])
-    combined_df = combine(
-        grouped_df,
-        :total_boardings => mean => :ridership_μ,
-        :total_boardings => std => :ridership_σ,
-        :primary_delay_hours => mean => :primary_μ,
-        :start_delay_seconds => mean => :secondary_μ,
-        :primary_delay_hours => std => :primary_σ,
-        :start_delay_seconds => std => :secondary_σ
-    )
-
-    for trip in eachrow(df)
-        for row in eachrow(combined_df)
-            if trip.route == row.route && trip.planned_start_hour == row.planned_start_hour && trip.direction == row.direction
-                trip.primary_delay_hours += max(-row.primary_μ, 0)
+    if normalize
+        grouped_df = DataFrames.groupby(df, [:route, :planned_start_hour, :direction])
+        combined_df = combine(
+            grouped_df,
+            :total_boardings => mean => :ridership_μ,
+            :total_boardings => std => :ridership_σ,
+            :primary_delay_hours => mean => :primary_μ,
+            :start_delay_seconds => mean => :secondary_μ,
+            :primary_delay_hours => std => :primary_σ,
+            :start_delay_seconds => std => :secondary_σ
+        )
+    
+        for trip in eachrow(df)
+            for row in eachrow(combined_df)
+                if trip.route == row.route && trip.planned_start_hour == row.planned_start_hour && trip.direction == row.direction
+                    trip.primary_delay_hours += max(-row.primary_μ, 0)
+                end
             end
         end
     end
@@ -253,6 +259,7 @@ function getHistoricalDelays(
     data::DataFrame,
     n::Int;
     randomSeed = nothing,
+    split = 1.0,
     multi = 1.0
 )
     L = zeros(Float64, size(trips, 1)+1, n)
@@ -278,7 +285,11 @@ function getHistoricalDelays(
         end
     end
 
-    return L .* multi
+    n_train = sample(1:n, Int(n*split), replace = false)
+    L_train = L[:, n_train] .* multi
+    L_test = L[:, Not(n_train)] .* multi
+
+    return L_train, L_test
 end
 
 """

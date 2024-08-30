@@ -7,3 +7,4 @@ imgs/archive/
 # data #
 *.txt
 *.csv
+*.jld2

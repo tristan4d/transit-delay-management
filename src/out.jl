@@ -213,25 +213,29 @@ Colors indicate the secondary passenger delay cost.  The number indicates the ro
 number.
 """
 function plotVSP_time(
-    sol::Union{VSPSolution, MCFSolution};
+    x::Union{Matrix{Float64}, Matrix{Int}},
+    instance::VSPInstance;
+    s = nothing,
     plot_size = (600, 400),
     delays = nothing,
     ridership = nothing,
     clims = nothing,
-    time_thresh = nothing
+    time_thresh = nothing,
+    primary = false
     )
-    trips = sol.mod.inst.trips
-    B = sol.mod.inst.B
-    D = sol.mod.inst.D
-    x = convert(Matrix{Bool}, round.(sol.x))
-    s = nothing
+    trips = instance.trips
+    B = instance.B
+    D = instance.D
+    x = convert(Matrix{Bool}, round.(x))
 
-    if isnothing(delays)
-        s = sol.s
+    if primary
+        s = vec(mean(delays, dims=2))[2:end]
+    elseif isnothing(delays)
+        s = s
     else
         this_s = zeros(Float64, size(delays))
         for scenario in 1:size(delays, 2)
-            this_s[:, scenario] = feasibleDelays(sol.x, delays[:, scenario], B)
+            this_s[:, scenario] = feasibleDelays(x, delays[:, scenario], B)
         end
         s = vec(mean(this_s, dims=2))[2:end]
     end
@@ -247,7 +251,7 @@ function plotVSP_time(
     time_plot = plot(;
         xlabel="time of day (hrs)",
         ylabel="vehicle schedule",
-        yticks=0:sol.numVehicles+1,
+        yticks=0:length(schedules)+1,
         legend=(isnothing(time_thresh) ? false : :outertopright),
         colorbar=true,
         size=plot_size
@@ -291,10 +295,10 @@ function plotVSP_time(
             trip_long = isnothing(time_thresh) ? false : (trips[trip, :stop_time] - trips[trip, :start_time] > time_thresh)
             !isnothing(time_thresh) && plot!(
                 [trips[trip, :start_time], trips[trip, :stop_time]],
-                [counter-0.2, counter-0.2];
+                [counter-0.4, counter-0.4];
                 label=(trip_long ? (long_flag ? "> 40 mins" : "") : (short_flag ? "≤ 40 mins" : "")),
-                lc = (trip_long ? :grey15 : :grey75),
-                lw = 10
+                lc = (trip_long ? :grey15 : :grey65),
+                lw = 2
             )
             plot!(
                 [trips[trip, :start_time], trips[trip, :stop_time]],
@@ -480,23 +484,61 @@ function generate_blocks(x::Matrix{Bool})
     return schedules
 end
 
-function runTimeAnalysis(sol::MCFSolution, delays::Matrix{Float64}; percentile = nothing)
+"""
+    feasibleDelays(
+        x::Matrix{Float64},
+        l::Vector{Float64},
+        B::Matrix{Float64}
+    )
+
+Calculate the propagated delay at each trip given arc decisions `x`, expected delays
+`l`, and buffer times `B`.
+"""
+function feasibleDelays(
+    x::Union{Matrix{Float64}, Matrix{Bool}},
+    l::Vector{Float64},
+    B::Matrix{Float64}
+)
+    n = size(x, 1)
+    s = zeros(Float64, n)
+    delays = ones(Float64, n)
+    iterations = 0
+
+    while any(delays .> eps())
+        if iterations > 100
+            println("max iterations exceeded")
+            break
+        end
+
+        delays = [x[:, i]' * (s .+ l .- B[:, i]) - s[i] for i ∈ 1:n]
+
+        iterations += 1
+        s = max.(0, s .+ delays)
+    end
+
+    return max.(0, s .+ l)
+end
+
+function runTimeAnalysis(sol::MCFSolution; percentile = nothing)
     trips = copy(sol.mod.inst.trips)
+    r = sol.mod.inst.r
+    L_train = sol.mod.inst.L_train
+    L_test = sol.mod.inst.L_test
+    delay_cost = sol.mod.inst.delay_cost
+    op_cost = sol.mod.inst.op_cost
     if isnothing(percentile)
-        delay_cost = sol.mod.inst.delay_cost
-        op_cost = sol.mod.inst.op_cost
-        r = sol.mod.inst.r
         percentile = max.(1 .- op_cost ./ delay_cost ./ r, 0)
         pushfirst!(percentile, 0)
     end
 
-    q = quantile.(eachrow(delays), percentile)
+    q = quantile.(eachrow(L_train), percentile)
+    q = max.(mean(L_train, dims=2), q)
     trips.stop_time .+= q[2:end]
 
-    instance = VSPInstance(trips)
+    instance = VSPInstance(trips, r, L_train .- q, L_test .- q)
 
     rta_model = MCFModel(instance)
     rta_solution = solve!(rta_model)
 
-    return rta_solution, q
+    return rta_solution
 end

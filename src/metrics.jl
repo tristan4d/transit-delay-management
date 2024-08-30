@@ -26,47 +26,43 @@ Solution statistics and metrics for minimum cost flow or delay-aware models.
 - `metrics::DataFrame`: trip-level metrics.
 """
 struct SolutionStats
-    sol::Union{VSPSolution, MCFSolution}
     cost::Float64
-    cost_err::Float64
+    cost_err::Tuple{Float64, Float64}
     vehicle_cost::Float64
     link_cost::Float64
-    passenger_cost::Float64
-    passenger_cost_err::Float64
     service_cost::Float64
-    service_cost_err::Float64
+    passenger_cost::Float64
+    passenger_cost_err::Tuple{Float64, Float64}
     μ::Float64
-    μ_10::Float64
-    σ::Float64
-    σ_10::Float64
+    μ_err::Tuple{Float64, Float64}
     utilization::Float64
     deadhead::Float64
     metrics::DataFrame
 end
 
 function getSolutionStats(
-    sol::Union{VSPSolution, MCFSolution},
+    x::Union{Matrix{Float64}, Matrix{Int}},
+    instance::VSPInstance,
     shapes::DataFrame,
     delays::Union{Matrix{Float64}, Nothing} = nothing;
     ridership = nothing
 )
-    x = convert(Matrix{Bool}, round.(sol.x))
+    x = convert(Matrix{Bool}, round.(x))
     schedules = generate_blocks(x)
-    n = sol.mod.inst.n
-    op_cost = sol.mod.inst.op_cost
-    delay_cost = sol.mod.inst.delay_cost
-    veh_cost = sol.mod.inst.veh_cost
-    B = sol.mod.inst.B
-    C = sol.mod.inst.C
-    D = sol.mod.inst.D
-    V = sol.mod.inst.V
-    trips = sol.mod.inst.trips
+    n = instance.n
+    op_cost = instance.op_cost
+    delay_cost = instance.delay_cost
+    veh_cost = instance.veh_cost
+    B = instance.B
+    C = instance.C
+    D = instance.D
+    V = instance.V
+    trips = instance.trips
     propagated_delays = zeros(Float64, n-1)
-    propagated_delay_errs = zeros(Float64, n-1)
 
     if isnothing(delays)
         L = sol.mod.L_train
-        numScenarios = sol.mod.n_train
+        numScenarios = size(L, 2)
     else
         L = delays
         numScenarios = size(delays, 2)
@@ -74,14 +70,15 @@ function getSolutionStats(
     this_s = zeros(Float64, n, numScenarios)
 
     for scenario in 1:numScenarios
-        this_s[:, scenario] = feasibleDelays(sol.x, L[:, scenario], B)
+        this_s[:, scenario] = feasibleDelays(x, L[:, scenario], B)
         if !isnothing(ridership)
             this_s[2:end, scenario] .*= ridership
         end
     end
 
     propagated_delays = vec(mean(this_s, dims=2))[2:end]
-    propagated_delay_errs = vec(std(this_s, dims=2))[2:end]
+    propagated_delay_lo = vec(quantile.(eachrow(this_s), .25))[2:end]
+    propagated_delay_hi = vec(quantile.(eachrow(this_s), .75))[2:end]
     metrics = DataFrame(
         [
             Float64[],
@@ -136,33 +133,25 @@ function getSolutionStats(
     
     vehicle_cost = veh_cost * sum(x[1, :])
     link_cost = sum(C .* x) - vehicle_cost
-    passenger_cost = sum(propagated_delays) * delay_cost
-    passenger_cost_err = sum(propagated_delay_errs) * delay_cost
-    service_cost = sum(propagated_delays ./ ridership .* x[2:end, 1]) * op_cost +
-        sum(propagated_delays' * (V .* x)[2:end, 2:end]) * op_cost +
-        sum(mean(L, dims=2) .* x[:, 1]) * op_cost +
-        sum(trips[:, :stop_time] .- trips[:, :start_time]) * op_cost
-    service_cost_err = sum(propagated_delay_errs ./ ridership .* x[2:end, 1]) * op_cost +
-        sum(propagated_delay_errs' * (V .* x)[2:end, 2:end]) * op_cost
+    service_cost = sum(trips[:, :stop_time] .- trips[:, :start_time]) * op_cost
+    passenger_cost = sum(max.(propagated_delays, 0)) * delay_cost
+    passenger_cost_lo = sum(max.(propagated_delay_lo, 0)) * delay_cost
+    passenger_cost_hi = sum(max.(propagated_delay_hi, 0)) * delay_cost
 
     cost = vehicle_cost + link_cost + passenger_cost + service_cost
-    cost_err = passenger_cost_err + service_cost_err
+    cost_lo = vehicle_cost + link_cost + passenger_cost_lo + service_cost
+    cost_hi = vehicle_cost + link_cost + passenger_cost_hi + service_cost
     
-    s_10 = ceil(Int, numScenarios/10)
     return SolutionStats(
-        sol,
         cost,
-        cost_err,
+        (cost_lo, cost_hi),
         vehicle_cost,
         link_cost,
-        passenger_cost,
-        passenger_cost_err,
         service_cost,
-        service_cost_err,
+        passenger_cost,
+        (passenger_cost_lo, passenger_cost_hi),
         mean(this_s) * 60,
-        mean(sort(this_s, dims=2, rev=true)[:, 1:s_10]) * 60,
-        std(this_s) * 60,
-        std(sort(this_s, dims=2, rev=true)[:, 1:s_10]) * 60,
+        (quantile(Iterators.flatten(this_s), 0.25), quantile(Iterators.flatten(this_s), 0.75)),
         1 - total_nis_length / total_duration,
         total_deadhead * 60,
         metrics
@@ -198,40 +187,6 @@ function notInServiceLength(s::Vector{Int}, trips::DataFrame, D::Matrix{Float64}
     end
 
     return nis
-end
-
-"""
-    feasibleDelays(
-        x::Matrix{Float64},
-        l::Vector{Float64},
-        B::Matrix{Float64}
-    )
-
-Calculate the propagated delay at each trip given arc decisions `x`, expected delays
-`l`, and buffer times `B`.
-"""
-function feasibleDelays(
-    x::Matrix{Float64},
-    l::Vector{Float64},
-    B::Matrix{Float64}
-)
-    n = size(x, 1)
-    s = zeros(Float64, n)
-    delays = ones(Float64, n)
-    iterations = 0
-
-    while any(delays .> eps())
-        if iterations > 100
-            break
-        end
-
-        delays = [x[:, i]' * (s .+ l .- B[:, i]) - s[i] for i ∈ 1:n]
-
-        iterations += 1
-        s = max.(0, s .+ delays)
-    end
-
-    return s
 end
 
 function getGeometry(

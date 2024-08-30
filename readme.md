@@ -21,12 +21,14 @@ Tristan Ford
 
 ``` math
 \begin{gather*}
-\min_{\mathbf{x}, \mathbf{y}} \quad & \sum_{(i, j) \in \mathcal{E}} c_{ij} x_{ij} + \frac{1}{S}\sum_{s=1}^S \sum_{i \in \mathcal{T}} h_i y_i^s \\
+\min_{\mathbf{x}, \mathbf{y}} \quad & \sum_{(i, j) \in \mathcal{E}} c_{ij} x_{ij} + \frac{1}{S}\sum_{s=1}^S \sum_{i \in \mathcal{T}} r_i h_i z_i^s \\
 \text{s.t.} \quad & \sum_{j \in \mathtt{In}(i)} x_{ji} = 1 & \forall i \in \mathcal{T}, \\
 & \sum_{j \in \mathtt{In}(i)} x_{ji} - \sum_{j \in \mathtt{Out}(i)} x_{ij} = 0 & \forall i \in \mathcal{T},  \\
 & y_i^s \geq \sum_{j \in \mathtt{In}(i)} (y_j^s + \ell_j^s - b_{ji})x_{ji} & \forall i \in \mathcal{T}, s \in \mathcal{S},  \\
+& z_i^s \geq y_i^s + \ell_i^s & \forall i \in \mathcal{T}, s \in \mathcal{S}, \\
 & x_{i, j} \in \{0, 1\} & \forall (i, j) \in \mathcal{E},  \\
-& y_i^s \geq 0 & \forall i \in \mathcal{T}, s \in \mathcal{S}.
+& y_i^s \geq 0 & \forall i \in \mathcal{T}, s \in \mathcal{S}, \\
+& z_i^s \geq 0 & \forall i \in \mathcal{T}, s \in \mathcal{S}. \\
 \end{gather*}
 ```
 
@@ -153,7 +155,7 @@ We calculate the similarity of two schedules using the `compareSchedules` functi
 
 ## Why Not Just Use the Mean?
 
-### Vignette
+### Vignette <span style="color:red">(revise for end of trip delay)</span>
 
 Consider the stochastic delay-aware mathematical model for our problem, where $y_i^s$ is defined as the amount of time that trip $i$ departs after its scheduled departure time in scenario $s$.  Note, this cannot be negative as trips are not allowed to depart early.  $l_i^s$ is the primary delay for trip $i$ in scenario $s$.
 
@@ -171,12 +173,14 @@ Should we restrict our model to the scenario including only mean primary delays,
 \text{s.t.} \quad & \sum_{j \in \mathtt{In}(i)} x_{ji} = 1 & \forall i \in \mathcal{T}, \\
 & \sum_{j \in \mathtt{In}(i)} x_{ji} - \sum_{j \in \mathtt{Out}(i)} x_{ij} = 0 & \forall i \in \mathcal{T}, \\
 & y_i \geq \sum_{j \in \mathtt{In}(i)} (y_j + \overline{\ell}_j - b_{ji})x_{ji} = \sum_{j \in \mathtt{In}(i)} (y_j - b_{ji})x_{ji} & \forall i \in \mathcal{T}, \\
+& z_i \geq y_i + \overline{\ell}_i = y_i & \forall i \in \mathcal{T}, \\
 & x_{i, j} \in \{0, 1\} & \forall (i, j) \in \mathcal{E}, \\
-& y_i \geq 0 & \forall i \in \mathcal{T},
+& y_i \geq 0 & \forall i \in \mathcal{T}, \\
+& z_i \geq 0 & \forall i \in \mathcal{T},
 \end{gather*}
 ```
 
- then we observe that $y_i=0$ is optimal, as all buffer times of feasible connections are positive, and the model collapses to the minimum cost solution.  However, consider two linked trips, $(i, j)$, in this minimum cost solution.  Let $L$ be a random variable representing the primary delay experienced on trip $i$.  Disregarding the effects of delay propagation, the expected secondary delay for trip $j$ is
+ then we observe that $y_i=z_i=0$ is optimal, as all buffer times of feasible connections are positive, and the model collapses to the minimum cost solution.  However, consider two linked trips, $(i, j)$, in this minimum cost solution.  Let $L$ be a random variable representing the primary delay experienced on trip $i$.  Disregarding the effects of delay propagation, the expected secondary delay for trip $j$ is
 
  $$
 \mathbb{E}[y_j]=\mathbb{E}[\max\left(L-b_{ij}, 0\right)]=\mathbb{E}[L-b_{ij}\mid L>b_{ij}]P(L>b_{ij}).
@@ -194,7 +198,7 @@ Thus, even without delay propagation effects, we can expect a non-zero passenege
 
 Run Time Analysis (RTA) is a common practice within transit agencies to adjust travel times to current traffic patterns.  For a given trip, historical travel times are analyzed and a new travel time is prescribed that allows for a given percentile of the historical trips to be completed on time - typically the 85th percentile is used.  In rare cases, this may result in shorter travel times.
 
-### Vignette
+### Vignette <span style="color:red">(revise as per Overleaf)</span>
 
 We propose a slightly more intelligent form of the RTA process which identifies an optimal percentile to minimize costs for each trip.  We label this problem $\text{RTA}^*$.  Consider two trips $i$ and $j$ separated by buffer time $b$ and share a common terminus (no deadheading required).  Let $L$ be a random variable representing the primary delay for trip $i$.  $c$ and $h$ represent the cost per hour of service operation and the cost per hour of passenger delay, respectively.  $r_i$ and $r_j$ are the average ridership values for trips $i$ and $j$, respectively. Then we may formulate the $\text{RTA}^*$ for trip $i$ as
 

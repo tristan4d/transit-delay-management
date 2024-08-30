@@ -29,7 +29,8 @@ struct VSPInstance
 	op_cost::Int # $ per hour of operation
 	delay_cost::Int # $ per passenger waiting hour
 	veh_cost::Int # $ per vehicle
-	l::Vector{Distribution} # normal distributions for expected delay for all trips
+	L_train::Matrix{Float64}
+	L_test::Matrix{Float64}
 	r::Vector{Float64} # ridership for all trips
 	C::Matrix{Float64} # adjacency-cost lists for all trips
 	B::Matrix{Float64} # buffer time between all trips
@@ -67,10 +68,10 @@ Possible deadheads are determined by haversine distance and `averageSpeed`.  A `
 may be specified, and defaults to the average starting location of all trips in `trips`.
 """
 function VSPInstance(
-	trips::DataFrame;
-	randomSeed = 1,
-    l::Union{Matrix{Float64}, Vector{Distribution}, Nothing} = nothing, # [μ, σ]
-	r::Union{Vector{Float64}, Nothing} = nothing,
+	trips::DataFrame,
+	r::Vector{Float64},
+	L_train::Matrix{Float64},
+	L_test::Matrix{Float64};
 	op_cost = 160, # $ per hour of operation
 	delay_cost = 37, # $ per passenger waiting hour
 	veh_cost = 600, # $ per vehicle
@@ -78,22 +79,6 @@ function VSPInstance(
 	depot_loc = (mean(trips[:, :start_lat]), mean(trips[:, :start_lon]))
 )
 	n = size(trips, 1) + 1
-	delays = Distribution[]
-	if isnothing(l)
-		delays = getDelays(trips; randomSeed=randomSeed)
-	else
-		if eltype(l) == Distribution
-			delays = l
-		else
-			trip_lengths = trips[:, :stop_time] .- trips[:, :start_time]
-			μ = l[:, 1]
-			σ = l[:, 2]
-
-			for (i, tl) in enumerate(trip_lengths)
-				push!(delays, truncated(Normal(μ[i], σ[i]), upper=tl))
-			end
-		end
-	end
 	C = zeros(Float64, n, n)
     C[1, 2:end] .= veh_cost # cost per vehicle
 	B = zeros(Float64, n, n)
@@ -136,15 +121,10 @@ function VSPInstance(
 	# using longest path to tighten big-M
 	g = SimpleDiGraph(G[2:end, 2:end])
 	m = -1*minimum(Graphs.dijkstra_shortest_paths(g, findall(G[1,2:end]), -1*ones(Int, n-1, n-1)).dists)
-	M = sum(sort(maximum.(delays), rev=true)[1:m+1])
+	M = sum(sort(maximum.(eachrow(L_train)), rev=true)[1:m])
     B[2:end, 1] .= M # *infinite* buffer time when returning to depot
 
-	# get ridership
-	if isnothing(r)
-		r = getRidership(trips; randomSeed=randomSeed)
-	end
-
-	return VSPInstance(n, M, op_cost, delay_cost, veh_cost, delays, r, C, B, D, V, G, trips)
+	return VSPInstance(n, M, op_cost, delay_cost, veh_cost, L_train, L_test, r, C, B, D, V, G, trips)
 end
 
 """
