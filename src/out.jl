@@ -215,8 +215,8 @@ number.
 function plotVSP_time(
     x::Union{Matrix{Float64}, Matrix{Int}},
     instance::VSPInstance;
-    s = nothing,
     plot_size = (600, 400),
+    endoftrip = true,
     delays = nothing,
     ridership = nothing,
     clims = nothing,
@@ -228,20 +228,23 @@ function plotVSP_time(
     D = instance.D
     x = convert(Matrix{Bool}, round.(x))
 
+    if isnothing(delays)
+        delays = instance.L_test
+    end
+    if isnothing(ridership)
+        ridership = instance.r
+    end
+
     if primary
         s = vec(mean(delays, dims=2))[2:end]
-    elseif isnothing(delays)
-        s = s
     else
         this_s = zeros(Float64, size(delays))
         for scenario in 1:size(delays, 2)
-            this_s[:, scenario] = feasibleDelays(x, delays[:, scenario], B)
+            this_s[:, scenario] = feasibleDelays(x, delays[:, scenario], B, endoftrip=endoftrip)
         end
         s = vec(mean(this_s, dims=2))[2:end]
     end
-    if !isnothing(ridership)
-        s = s .* ridership
-    end
+    s = s .* ridership
 
     schedules = generate_blocks(x)
     delay_cmap = reverse(ColorSchemes.roma)
@@ -497,7 +500,8 @@ Calculate the propagated delay at each trip given arc decisions `x`, expected de
 function feasibleDelays(
     x::Union{Matrix{Float64}, Matrix{Bool}},
     l::Vector{Float64},
-    B::Matrix{Float64}
+    B::Matrix{Float64};
+    endoftrip = true
 )
     n = size(x, 1)
     s = zeros(Float64, n)
@@ -516,7 +520,11 @@ function feasibleDelays(
         s = max.(0, s .+ delays)
     end
 
-    return max.(0, s .+ l)
+    if endoftrip
+        s = max.(0, s .+ l)
+    end
+
+    return s
 end
 
 function runTimeAnalysis(sol::MCFSolution; percentile = nothing)

@@ -15,44 +15,33 @@ Model for the Vehicle Scheduling Problem (VSP) with propagated delays.
 # Fields
 - `inst::VSPInstance`: VSP instance on which the model will be applied.
 - `model::JuMP.Model`: JuMP model for optimization.
-- `numScenarios::Int`: number of delay scenarios considered.
-- `n_train::Int`: number of delay scenarios in the training set.
-- `L_train::Matrix{Float64}`: primary delays for each trip and scenario in the training set.
-- `L_test::Matrix{Float64}`: primary delays for each trip and scenario in the test set.
 - `x::Matrix{VariableRef}`: references to arc decision variables in the `model`.
 - `s::Matrix{VariableRef}`: references to the propagated delay variables in the `model`.
+- `endoftrip::Bool`: whether the model is optimizing over end of trip delays or not
 """
 struct VSPModel
-    inst::VSPInstance # VSP instance
-    model::JuMP.Model # VSP model
-    numScenarios::Int # number of scenarios
-    n_train::Int # number of training scenarios
-    L_train::Matrix{Float64} # primary trip delays for each scenario in the training set
-    L_test::Matrix{Float64} # primary trip delays for each scenario in the test set
-    x::Matrix{VariableRef} # decision variable matrix
-    s::Matrix{VariableRef} # propagated delay variable matrix
+    inst::VSPInstance
+    model::JuMP.Model
+    x::Matrix{VariableRef}
+    s::Matrix{VariableRef}
+    endoftrip::Bool
 end
 
 """
-    VSPModel(
+    function VSPModel(
         inst::VSPInstance[,
-        numScenarios = 100,
-        split = 1.0,
-        randomSeed = 1,
+        L_train = nothing,
         warmStart = nothing,
-        isInt = false,
+        isInt = true,
         multiObj = false,
         silent = true,
         outputFlag = 0,
-        timeLimit = 60
-        ]
+        timeLimit = 60]
     )
 
 Create a VSP model object from `inst`.
 
-`numScenarios` dictates how many delay scenarios to consider.  `split` is the ratio of 
-scenarios that are included in the test set.  `randomSeed` to determine
-randomness of trip delays.  `warmStart` can be used to initiate link variables from
+`warmStart` can be used to initiate link variables from
 an input solution.  `isInt`enforces if arc decision variables should be integer or not.
 `multiObj` enforces whether the model should apply ϵ-constrained optimization on the
 delay and cost objectives.
@@ -60,6 +49,7 @@ delay and cost objectives.
 function VSPModel(
     inst::VSPInstance;
     L_train = nothing,
+    endoftrip = true,
     warmStart = nothing,
     isInt = true,
     multiObj = false,
@@ -83,7 +73,6 @@ function VSPModel(
         L_train = inst.L_train
     end
     n_train = size(L_train, 2)
-    L_test = inst.L_test
     r = inst.r
     M = inst.M
     C = inst.C
@@ -99,7 +88,9 @@ function VSPModel(
     # variable for propagated delay at trip i
     @variable(model, d[1:n-1, 1:n_train] >= 0)
     # variable for end of trip delay at trip i
-    @variable(model, s[1:n-1, 1:n_train] >= 0)
+    if endoftrip
+        @variable(model, s[1:n-1, 1:n_train] >= 0)
+    end
     # nonlinear variable x_ij * d_j
     @variable(model, ϕ[1:n-1, 1:n-1, 1:n_train] >= 0)
     # warm start with provided solution
@@ -118,7 +109,9 @@ function VSPModel(
     @constraint(model, [i = 1:n-1, j = 1:n-1, k = 1:n_train], ϕ[i, j, k] <= d[i, k])
     @constraint(model, [i = 1:n-1, j = 1:n-1, k = 1:n_train], ϕ[i, j, k] >= d[i, k] - M * (1 - x[i+1, j+1]))
     # end of trip delay
-    @constraint(model, [i = 1:n-1, j = 1:n_train], s[i, j] >= d[i, j] + L_train[i+1, j])    
+    if endoftrip
+        @constraint(model, [i = 1:n-1, j = 1:n_train], s[i, j] >= d[i, j] + L_train[i+1, j])  
+    end  
     # flow constraint
     @constraint(model, [i = 1:n], sum(x[i, :]) - sum(x[:, i]) == 0)
     # require each trip is completed
@@ -127,7 +120,7 @@ function VSPModel(
     @expression(
         model,
         delay_expr,
-        sum(inst.delay_cost * r' * s) / n_train
+        endoftrip ? sum(inst.delay_cost * r' * s) / n_train : sum(inst.delay_cost * r' * d) / n_train
     )
     @expression(model, cost_expr, sum(C .* x))
     if multiObj
@@ -136,7 +129,7 @@ function VSPModel(
         @objective(model, Min, delay_expr + cost_expr)
     end
 
-    return VSPModel(inst, model, size(L_train, 2) + size(L_test, 2), n_train, L_train, L_test, x, s)
+    return VSPModel(inst, model, x, endoftrip ? s : d, endoftrip)
 end
 
 """

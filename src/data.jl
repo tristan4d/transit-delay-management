@@ -14,7 +14,8 @@ An instance of the Vehicle Scheduling Problem (VSP).
 - `op_cost::Int`: the cost per hour of service operation.
 - `delay_cost::Int`: the cost per hour that a passenger is delayed.
 - `veh_cost::Int`: the daily cost of adding a new vehicle to the solution.
-- `l::Vector{Distribution}`: normal distribution for expected delays across each trip.
+- `L_train::Matrix{Float64}`: delay matrix for training.
+- `L_test::Matrix{Float64}`: delay matrix for testing.
 - `r::Vector{Float64}`: ridership for each trip.
 - `C::Matrix{Float64}`: cost for using arc (i, j) in the VSP network.
 - `B::Matrix{Float64}`: buffer time on arc (i, j) in the VSP network.
@@ -24,41 +25,40 @@ An instance of the Vehicle Scheduling Problem (VSP).
 - `trips::DataFrame`: the trips DataFrame, see `loadGTFS` in utils.jl.
 """
 struct VSPInstance
-	n::Int # number of trips + depot
-	M::Float64 # big-M constraint variable for propagated delay
-	op_cost::Int # $ per hour of operation
-	delay_cost::Int # $ per passenger waiting hour
-	veh_cost::Int # $ per vehicle
+	n::Int
+	M::Float64
+	op_cost::Int
+	delay_cost::Int
+	veh_cost::Int
 	L_train::Matrix{Float64}
 	L_test::Matrix{Float64}
-	r::Vector{Float64} # ridership for all trips
-	C::Matrix{Float64} # adjacency-cost lists for all trips
-	B::Matrix{Float64} # buffer time between all trips
-	D::Matrix{Float64} # D[i, j] is the deadhead time from the end of trip i to the start of trip j
-	V::Matrix{Bool} # virtual depot trips
-	G::Matrix{Bool} # connections between trips (G[i,j] = 1 if arc i -> j in G)
-	trips::DataFrame # trips dataframe
+	r::Vector{Float64}
+	C::Matrix{Float64}
+	B::Matrix{Float64}
+	D::Matrix{Float64}
+	V::Matrix{Bool}
+	G::Matrix{Bool}
+	trips::DataFrame
 end
 
 """
 	VSPInstance(
-		trips::DataFrame[,
+		trips::DataFrame,
 		randomSeed = 1,
-		l::Union{Matrix{Float64}, Vector{Distribution}, Nothing} = nothing,
-		r::Union{Vector{Float64}, Nothing} = nothing,
+		L_train::Matrix{Float64},
+		L_test::Matrix{Float64}[,
 		op_cost = 160,
 		delay_cost = 37,
 		veh_cost = 600,
 		averageSpeed::Float64 = 30.0,
-		depot_loc = (mean(trips[:, :start_lat]), mean(trips[:, :start_lon]))
-		]
+		depot_loc = (mean(trips[:, :start_lat]), mean(trips[:, :start_lon]))]
 	)
 
 Create a VSPInstance object from the `trips` DataFrame.
 
-Expected trip delays may be specified by `l` which is a vector of distributions or 
-a matrix with mean delays in the first columnand standard deviations in the second.
-Trip ridership may be specified by `r`.  The costing of solutions may be modified with
+Trip ridership may be specified by `r`.
+`L_train` and `L_test` are the training and testing delays for this instance.
+The costing of solutions may be modified with
 
 - `op_cost`, the cost of one hour of service operations;
 - `delay_cost`, the cost of an hour of passenger delay; and

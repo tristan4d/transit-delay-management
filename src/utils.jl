@@ -103,8 +103,12 @@ function loadGTFS(path::String)
         lat_lon_tuples = [(row.shape_pt_lon, row.shape_pt_lat) for row in eachrow(shape)]
         
         # extract shape_dist_traveled
-        # dist_traveled = maximum(shape.shape_dist_traveled) / 1000 # km
-        dist_traveled = sum([haversine(lat_lon_tuples[i], lat_lon_tuples[i+1], 6372.8) for i in 1:length(lat_lon_tuples)-1])
+        dist_traveled = Float64[]
+        try
+            dist_traveled = maximum(shape.shape_dist_traveled) / 1000 # km
+        catch
+            dist_traveled = sum([haversine(lat_lon_tuples[i], lat_lon_tuples[i+1], 6372.8) for i in 1:length(lat_lon_tuples)-1])
+        end
         
         push!(shape_pts, lat_lon_tuples)
         push!(shape_dist_traveled, dist_traveled)
@@ -254,6 +258,23 @@ function getDelays(
     return delays
 end
 
+"""
+    getHistoricalDelays(
+        trips::DataFrame,
+        data::DataFrame,
+        n::Int[,
+        randomSeed = nothing,
+        split = 1.0,
+        multi = 1.0]
+    )
+
+
+Generates training and testing delay matrices.
+
+For each trip in `trips`, sample `n` delays from the historical `data`.  `split` determines
+the ratio of training to testing samples.  `multi` allows for adjusting delays by a common
+factor.  Matches trips to delay data by route number, direction, and trip start hour.
+"""
 function getHistoricalDelays(
     trips::DataFrame,
     data::DataFrame,
@@ -273,6 +294,30 @@ function getHistoricalDelays(
             (data.planned_start_hour .== floor(trip.start_time)) .&
             (data.direction .== trip.direction)
         ]
+
+        if isempty(subset)
+            subset = data.primary_delay_hours[
+                (data.route .== trip.route_id) .&
+                (data.planned_start_hour .== ceil(trip.start_time)) .&
+                (data.direction .== trip.direction)
+            ]
+        end
+
+        if isempty(subset)
+            subset = data.primary_delay_hours[
+                (data.route .== trip.route_id) .&
+                (data.planned_start_hour .== (ceil(trip.start_time) + 1)) .&
+                (data.direction .== trip.direction)
+            ]
+        end
+
+        if isempty(subset)
+            subset = data.primary_delay_hours[
+                (data.route .== trip.route_id) .&
+                (data.planned_start_hour .== (floor(trip.start_time) - 1)) .&
+                (data.direction .== trip.direction)
+            ]
+        end
 
         if isempty(subset)
             print(trip)
@@ -320,6 +365,17 @@ function getRidership(
     return rand(dist, n)
 end
 
+"""
+    getHistoricalRidership(
+        trips::DataFrame,
+        data::DataFrame
+    )
+
+Generates a vector representing average ridership across each trip in `trips`.
+
+Each ridership value is the mean of historical `data`.
+Matches trips to delay data by route number, direction, and trip start hour.
+"""
 function getHistoricalRidership(
     trips::DataFrame,
     data::DataFrame
@@ -332,6 +388,30 @@ function getHistoricalRidership(
             (data.planned_start_hour .== floor(trip.start_time)) .&
             (data.direction .== trip.direction)
         ]
+
+        if isempty(subset)
+            subset = data.primary_delay_hours[
+                (data.route .== trip.route_id) .&
+                (data.planned_start_hour .== ceil(trip.start_time)) .&
+                (data.direction .== trip.direction)
+            ]
+        end
+
+        if isempty(subset)
+            subset = data.primary_delay_hours[
+                (data.route .== trip.route_id) .&
+                (data.planned_start_hour .== (ceil(trip.start_time) + 1)) .&
+                (data.direction .== trip.direction)
+            ]
+        end
+
+        if isempty(subset)
+            subset = data.primary_delay_hours[
+                (data.route .== trip.route_id) .&
+                (data.planned_start_hour .== (floor(trip.start_time) - 1)) .&
+                (data.direction .== trip.direction)
+            ]
+        end
 
         push!(r, mean(subset))
     end

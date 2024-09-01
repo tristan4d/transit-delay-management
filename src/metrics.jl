@@ -8,19 +8,15 @@ using Statistics
 Solution statistics and metrics for minimum cost flow or delay-aware models.
 
 # Fields
-- `sol::Union{VSPSolution, MCFSolution}`: a solution of a VSP instance.
 - `cost::Float64`: cost, in monetary units, of the solution.
-- `cost_err::Float64`: cost confidence interval, in monetary units, of the solution.
+- `cost_err::Tuple{Float64}`: cost confidence interval, in monetary units, of the solution.
 - `vehicle_cost::Float64`: cost, in monetary units, of the fleet.
 - `link_cost::Float64`: cost, in monetary units, of the chosen links.
-- `passenger_cost::Float64`: cost, in monetary units, of the total passenger delay.
-- `passenger_cost_err::Float64`: cost confidence interval, in monetary units, of the total passenger delay.
 - `service_cost::Float64`: cost, in monetary units, of the service delivered.
-- `service_cost_err::Float64`: cost confidence interval, in monetary units, of the service delivered.
+- `passenger_cost::Float64`: cost, in monetary units, of the total passenger delay.
+- `passenger_cost_err::Tuple{Float64}`: cost confidence interval, in monetary units, of the total passenger delay.
 - `μ::Float64`: the mean (passenger) delay per trip.
-- `μ_10::Float64`: the mean (passenger) delay per trip of the worst 10% of instances.
-- `σ::Float64`: the standard deviation of (passenger) delay per trip.
-- `σ_10::Float64`: the standard deviation of (passenger) delay per trip of the worst 10% of instances.
+- `μ_err::Float64`: confidence interval of (passenger) delay per trip.
 - `utilization::Float64`: the percent of time spent moving passengers.
 - `deadhead::Float64`: the distance, in minutes, of deadheading in the solution.
 - `metrics::DataFrame`: trip-level metrics.
@@ -43,8 +39,9 @@ end
 function getSolutionStats(
     x::Union{Matrix{Float64}, Matrix{Int}},
     instance::VSPInstance,
-    shapes::DataFrame,
-    delays::Union{Matrix{Float64}, Nothing} = nothing;
+    shapes::DataFrame;
+    endoftrip = true,
+    delays = nothing,
     ridership = nothing
 )
     x = convert(Matrix{Bool}, round.(x))
@@ -56,24 +53,24 @@ function getSolutionStats(
     B = instance.B
     C = instance.C
     D = instance.D
-    V = instance.V
     trips = instance.trips
     propagated_delays = zeros(Float64, n-1)
 
     if isnothing(delays)
-        L = sol.mod.L_train
-        numScenarios = size(L, 2)
+        L = instance.L_test
     else
         L = delays
-        numScenarios = size(delays, 2)
     end
+    if isnothing(ridership)
+        ridership = instance.r
+    end
+
+    numScenarios = size(L, 2)
     this_s = zeros(Float64, n, numScenarios)
 
     for scenario in 1:numScenarios
-        this_s[:, scenario] = feasibleDelays(x, L[:, scenario], B)
-        if !isnothing(ridership)
-            this_s[2:end, scenario] .*= ridership
-        end
+        this_s[:, scenario] = feasibleDelays(x, L[:, scenario], B, endoftrip=endoftrip)
+        this_s[2:end, scenario] .*= ridership
     end
 
     propagated_delays = vec(mean(this_s, dims=2))[2:end]

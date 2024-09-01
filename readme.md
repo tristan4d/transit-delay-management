@@ -21,7 +21,7 @@ Tristan Ford
 
 ``` math
 \begin{gather*}
-\min_{\mathbf{x}, \mathbf{y}} \quad & \sum_{(i, j) \in \mathcal{E}} c_{ij} x_{ij} + \frac{1}{S}\sum_{s=1}^S \sum_{i \in \mathcal{T}} r_i h_i z_i^s \\
+\min_{\mathbf{x}, \mathbf{z}} \quad & \sum_{(i, j) \in \mathcal{E}} c_{ij} x_{ij} + \frac{1}{S}\sum_{s=1}^S \sum_{i \in \mathcal{T}} r_i h_i z_i^s \\
 \text{s.t.} \quad & \sum_{j \in \mathtt{In}(i)} x_{ji} = 1 & \forall i \in \mathcal{T}, \\
 & \sum_{j \in \mathtt{In}(i)} x_{ji} - \sum_{j \in \mathtt{Out}(i)} x_{ij} = 0 & \forall i \in \mathcal{T},  \\
 & y_i^s \geq \sum_{j \in \mathtt{In}(i)} (y_j^s + \ell_j^s - b_{ji})x_{ji} & \forall i \in \mathcal{T}, s \in \mathcal{S},  \\
@@ -69,6 +69,20 @@ To create this graph, we rely upon General Transit Feed Specification (GTFS) dat
 We have partnered with [BC Transit](https://www.bctransit.com/choose-transit-system/) to obtain historical delay data.  This information provides, on a trip-level, primary delay and secondary delay.  We show data from the Fall 2023 service period (which roughly spans September-November) for Nanaimo and Victoria transit systems.
 
 We observe that, despite some trips completing early which corresponds to negative primary delays, there are very few trips which depart early.  This highlights the operational requirement for trips to not start early as this can be frustrating for customers.  Furthermore, though the relative percent of trips with large secondary delays is low, there are still many instances where these large delays do occur, as shown in the boxplot.  We alse note that the delays in Victoria appear to be more significant than in Nanaimo.  This makes sense as Victoria is a larger city and may be expected to suffer from increased congestion.
+
+<center>
+
+| Primary Delay (minutes) | Nanaimo | Victoria  |
+| :-:       | :-:     | :-:       |
+| $\mu$     | -0.12   | 1.12      |
+| $\sigma$  | 4.25    | 4.11      |
+| $p^{5}$   | -4.93   | -4.25     |
+| $p^{25}$  | -2.05   | -1.38     |
+| $p^{50}$  | -0.43   | 0.63      |
+| $p^{75}$  | 1.25    | 3.00      |
+| $p^{95}$  | 5.5     | 8.07      |
+
+</center>
 
 <p align="center">
   <img src="imgs/weekday_delay_histogram.png" width="800vw"/>
