@@ -110,12 +110,13 @@ function VSPModel(
     @constraint(model, [i = 1:n-1, j = 1:n-1, k = 1:n_train], ϕ[i, j, k] >= d[i, k] - M * (1 - x[i+1, j+1]))
     # end of trip delay
     if endoftrip
-        @constraint(model, [i = 1:n-1, j = 1:n_train], s[i, j] >= d[i, j] + L_train[i+1, j])  
+        # @constraint(model, [i = 1:n-1, j = 1:n_train], s[i, j] >= d[i, j] + L_train[i+1, j])  
+        @constraint(model, [i = 1:n-1, j = 1:n_train], s[i, j] >= d[i, j] + sum(x[:, i+1]) * L_train[i+1, j])  
     end  
     # flow constraint
     @constraint(model, [i = 1:n], sum(x[i, :]) - sum(x[:, i]) == 0)
-    # require each trip is completed
-    @constraint(model, [i = 2:n], sum(x[:, i]) == 1)
+    # require each trip is completed (and no duplicates)
+    @constraint(model, [i = 1:Int((n-1)/2)], sum(x[:, i+1]) + sum(x[:, i+1+Int((n-1)/2)]) == 1)
     # minimize total propagated delay and link costs
     @expression(
         model,
@@ -375,6 +376,7 @@ Create a min-cost flow model object from `inst`.
 """
 function MCFModel(
     inst::VSPInstance;
+    duplicates = true,
     silent = true,
     outputFlag = 0,
     timeLimit = 60
@@ -388,13 +390,18 @@ function MCFModel(
     G = inst.G
 
     # decision variable for arc i -> j
-    @variable(model, x[1:n, 1:n] >= 0)
+    @variable(model, x[1:n, 1:n] >= 0, Int)
     # force non-existant links to 0
     @constraint(model, [i = 1:n, j = 1:n; !G[i, j]], x[i, j] == 0)
     # flow constraint
     @constraint(model, [i = 1:n], sum(x[i, :]) - sum(x[:, i]) == 0)
-    # require each trip is completed
-    @constraint(model, [i = 2:n], sum(x[:, i]) == 1)
+    if duplicates
+        # no duplicates allowed
+        @constraint(model, [i = 1:Int((n-1)/2)], sum(x[:, i+1]) + sum(x[:, i+1+Int((n-1)/2)]) == 1)
+    else
+        # require each trip is completed
+        @constraint(model, [i = 2:n], sum(x[:, i]) == 1)
+    end
     # minimize total link costs
     @objective(model, Min, sum(C .* x))
 

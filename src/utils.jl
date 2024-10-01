@@ -283,7 +283,7 @@ function getHistoricalDelays(
     split = 1.0,
     multi = 1.0
 )
-    L = zeros(Float64, size(trips, 1)+1, n)
+    L = zeros(Float64, size(trips, 1), n)
     if !isnothing(randomSeed)
         Random.seed!(randomSeed)
     end
@@ -320,13 +320,19 @@ function getHistoricalDelays(
         end
 
         if isempty(subset)
+            subset = data.primary_delay_hours[
+                (data.route .== trip.route_id)
+            ]
+        end
+
+        if isempty(subset)
             print(trip)
         end
 
         if n > length(subset)
-            L[i+1, :] = sample(subset, n, replace=true)
+            L[i, :] = sample(subset, n, replace=true)
         else
-            L[i+1, :] = sample(subset, n, replace=false)
+            L[i, :] = sample(subset, n, replace=false)
         end
     end
 
@@ -390,7 +396,7 @@ function getHistoricalRidership(
         ]
 
         if isempty(subset)
-            subset = data.primary_delay_hours[
+            subset = data.total_boardings[
                 (data.route .== trip.route_id) .&
                 (data.planned_start_hour .== ceil(trip.start_time)) .&
                 (data.direction .== trip.direction)
@@ -398,7 +404,7 @@ function getHistoricalRidership(
         end
 
         if isempty(subset)
-            subset = data.primary_delay_hours[
+            subset = data.total_boardings[
                 (data.route .== trip.route_id) .&
                 (data.planned_start_hour .== (ceil(trip.start_time) + 1)) .&
                 (data.direction .== trip.direction)
@@ -406,14 +412,20 @@ function getHistoricalRidership(
         end
 
         if isempty(subset)
-            subset = data.primary_delay_hours[
+            subset = data.total_boardings[
                 (data.route .== trip.route_id) .&
                 (data.planned_start_hour .== (floor(trip.start_time) - 1)) .&
                 (data.direction .== trip.direction)
             ]
         end
 
-        push!(r, mean(subset))
+        if isempty(subset)
+            subset = data.total_boardings[
+                (data.route .== trip.route_id)
+            ]
+        end
+
+        push!(r, max(mean(subset), 1))
     end
 
     return r

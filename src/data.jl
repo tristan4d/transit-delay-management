@@ -72,12 +72,37 @@ function VSPInstance(
 	r::Vector{Float64},
 	L_train::Matrix{Float64},
 	L_test::Matrix{Float64};
+	original = false,
+	rta_only = false,
 	op_cost = 160, # $ per hour of operation
 	delay_cost = 37, # $ per passenger waiting hour
 	veh_cost = 600, # $ per vehicle
 	averageSpeed::Float64 = 30.0,
 	depot_loc = (mean(trips[:, :start_lat]), mean(trips[:, :start_lon]))
 )
+	if !original
+		percentile = min.(max.(1 .- op_cost ./ delay_cost ./ r, 0), 1)
+		q = quantile.(eachrow(L_train), percentile)
+		q = max.(mean(L_train, dims=2), q)
+		rta_trips = copy(trips)
+		rta_trips.stop_time .+= q
+	
+		if rta_only
+			# replace trips
+			trips = rta_trips
+			L_train = L_train .- q
+			L_test = L_test .- q
+		else
+			# add RTA trips
+			trips = vcat(trips, rta_trips)
+			L_train = vcat(L_train, L_train .- q)
+			L_test = vcat(L_test, L_test .- q)
+			r = vcat(r, r)
+		end
+	end
+	L_train = vcat(zeros(Float64, 1, size(L_train, 2)), L_train)
+	L_test = vcat(zeros(Float64, 1, size(L_test, 2)), L_test)
+
 	n = size(trips, 1) + 1
 	C = zeros(Float64, n, n)
     C[1, 2:end] .= veh_cost # cost per vehicle
@@ -85,34 +110,40 @@ function VSPInstance(
 	G = zeros(Bool, n, n)
 	G[1, 2:end] .= 1 # add link from depot to each trip
 	G[2:end, 1] .= 1 # add link from each trip to depot
-	D = zeros(Float64, n-1, n-1) # deadhead time between start/stop points
+	D = zeros(Float64, n, n) # deadhead time between start/stop points
 	V = zeros(Bool, n, n)
 
 	for i ∈ 1:n-1
-		D[1, i] = haversine(depot_loc, (trips[i, :start_lat], trips[i, :start_lon]), 6372.8) / averageSpeed 
-		D[i, 1] = haversine((trips[i, :stop_lat], trips[i, :stop_lon]), depot_loc, 6372.8) / averageSpeed 
-		C[1, i] += D[1, i] * op_cost
-		C[i, 1] = D[i, 1] * op_cost
+		D[1, i+1] = haversine(depot_loc, (trips[i, :start_lat], trips[i, :start_lon]), 6372.8) / averageSpeed 
+		D[i+1, 1] = haversine((trips[i, :stop_lat], trips[i, :stop_lon]), depot_loc, 6372.8) / averageSpeed 
+		C[1, i+1] += D[1, i+1] * op_cost
+		C[i+1, 1] = D[i+1, 1] * op_cost
+		if !original && (i > n/2.0 || rta_only)
+			C[1, i+1] += q[i-size(q, 1)*(!rta_only)] * op_cost
+		end
 		for j ∈ 1:n-1
             i == j && continue
+			# !original && !rta_only && i % ((n-1) / 2) == j % ((n-1) / 2) && continue # duplicate trips cannot be connected
 			timeDiff = trips[j, :start_time] - trips[i, :stop_time]
 			timeDiff < 0 && continue
 			coords_1 = (trips[i, :stop_lat], trips[i, :stop_lon])
 			coords_2 = (trips[j, :start_lat], trips[j, :start_lon])
 			distance = haversine(coords_1, coords_2, 6372.8)
-			D[i, j] = distance / averageSpeed
+			D[i+1, j+1] = distance / averageSpeed
 			if distance / averageSpeed <= timeDiff
 				G[i+1, j+1] = 1 # add link if vehicle can deadhead from i -> j
-				# ensure rational data
-                B[i+1, j+1] = round(timeDiff - distance / averageSpeed; digits = 2)
+                B[i+1, j+1] = timeDiff - distance / averageSpeed
 				if timeDiff < 3.0
-	                C[i+1, j+1] = round(distance / averageSpeed + timeDiff; digits = 2) * op_cost # cost per hour
+	                C[i+1, j+1] = (distance / averageSpeed + timeDiff) * op_cost # cost per hour
 				else
 					V[i+1, j+1] = 1
 					d1 = haversine(coords_1, depot_loc, 6372.8)
 					d2 = haversine(depot_loc, coords_2, 6372.8)
-					D[i, j] = (d1+d2) / averageSpeed
-					C[i+1, j+1] = round((d1 + d2) / averageSpeed; digits = 2) * op_cost * 2 # return to depot
+					D[i+1, j+1] = (d1+d2) / averageSpeed
+					C[i+1, j+1] = ((d1 + d2) / averageSpeed) * op_cost * 2 # return to depot
+				end
+				if !original && (j > n/2.0 || rta_only)
+					C[i+1, j+1] += q[j-size(q, 1)*(!rta_only)] * op_cost
 				end
 			end
 		end

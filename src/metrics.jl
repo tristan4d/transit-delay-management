@@ -130,14 +130,14 @@ function getSolutionStats(
     
     vehicle_cost = veh_cost * sum(x[1, :])
     link_cost = sum(C .* x) - vehicle_cost
-    service_cost = sum(trips[:, :stop_time] .- trips[:, :start_time]) * op_cost
+    service_cost = sum(sum(x[2:end, :], dims=2) .* (trips[:, :stop_time] .- trips[:, :start_time])) * op_cost
     passenger_cost = sum(max.(propagated_delays, 0)) * delay_cost
     passenger_cost_lo = sum(max.(propagated_delay_lo, 0)) * delay_cost
     passenger_cost_hi = sum(max.(propagated_delay_hi, 0)) * delay_cost
 
-    cost = vehicle_cost + link_cost + passenger_cost + service_cost
-    cost_lo = vehicle_cost + link_cost + passenger_cost_lo + service_cost
-    cost_hi = vehicle_cost + link_cost + passenger_cost_hi + service_cost
+    cost = vehicle_cost + link_cost + passenger_cost
+    cost_lo = vehicle_cost + link_cost + passenger_cost_lo
+    cost_hi = vehicle_cost + link_cost + passenger_cost_hi
     
     return SolutionStats(
         cost,
@@ -147,10 +147,13 @@ function getSolutionStats(
         service_cost,
         passenger_cost,
         (passenger_cost_lo, passenger_cost_hi),
-        mean(this_s) * 60,
-        (quantile(Iterators.flatten(this_s), 0.25), quantile(Iterators.flatten(this_s), 0.75)),
+        mean(this_s[sum(x[2:end, :], dims=2) .> 0, :]) * 60,
+        (
+            quantile(Iterators.flatten(this_s[sum(x[2:end, :], dims=2) .> 0, :]), 0.25),
+            quantile(Iterators.flatten(this_s[sum(x[2:end, :], dims=2) .> 0, :]), 0.75)
+        ),
         1 - total_nis_length / total_duration,
-        total_deadhead * 60,
+        total_deadhead,
         metrics
     )
 end
@@ -159,7 +162,7 @@ function getDeadhead(s::Vector{Int}, D::Matrix{Float64})
     time = 0.0
 
     for i in 1:size(s, 1)-1
-        time += D[s[i], s[i+1]]
+        time += D[s[i]+1, s[i+1]+1]
     end
 
     return time
@@ -169,12 +172,12 @@ function getBlockLength(s::Vector{Int}, trips::DataFrame, D::Matrix{Float64})
     start = trips[s[1], :start_time]
     stop = trips[s[end], :stop_time]
 
-    return stop - start + D[1, s[1]] + D[s[end], 1]
+    return stop - start + D[1, s[1]+1] + D[s[end]+1, 1]
 end
 
 function notInServiceLength(s::Vector{Int}, trips::DataFrame, D::Matrix{Float64})
-    nis = D[1,s[1]]
-    nis += D[s[end], 1]
+    nis = D[1,s[1]+1]
+    nis += D[s[end]+1, 1]
 
     for i in 1:length(s)-1
         stop = trips[s[i], :stop_time]

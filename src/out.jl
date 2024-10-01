@@ -8,6 +8,7 @@ using ColorSchemes
 using JuMP
 using Random
 using Statistics
+using StatsBase
 
 """
     VSPSolution
@@ -215,15 +216,23 @@ number.
 function plotVSP_time(
     x::Union{Matrix{Float64}, Matrix{Int}},
     instance::VSPInstance;
-    plot_size = (600, 400),
+    plot_size = (800, 600),
     endoftrip = true,
+    show_rta = false,
     delays = nothing,
     ridership = nothing,
     clims = nothing,
-    time_thresh = nothing,
-    primary = false
+    primary = false,
+    sim_no_rta = false,
+    title = ""
     )
     trips = instance.trips
+    has_dupes = any(v > 1 for (k, v) in countmap(instance.trips.trip_id))
+    if has_dupes
+        rta_thresh = floor(Int, size(trips, 1) / 2)
+    else
+        rta_thresh = size(trips, 1)
+    end
     B = instance.B
     D = instance.D
     x = convert(Matrix{Bool}, round.(x))
@@ -237,6 +246,9 @@ function plotVSP_time(
 
     if primary
         s = vec(mean(delays, dims=2))[2:end]
+        if sim_no_rta
+            s[rta_thresh+1:end] .= s[1:rta_thresh]
+        end
     else
         this_s = zeros(Float64, size(delays))
         for scenario in 1:size(delays, 2)
@@ -247,23 +259,25 @@ function plotVSP_time(
     s = s .* ridership
 
     schedules = generate_blocks(x)
-    delay_cmap = reverse(ColorSchemes.roma)
+    # delay_cmap = reverse(ColorSchemes.roma)
+    delay_cmap = ColorSchemes.Reds
+
     if isnothing(clims)
         clims = (0, maximum(s))
     end
     time_plot = plot(;
-        xlabel="time of day (hrs)",
+        xlabel="time of day (hours)",
         ylabel="vehicle schedule",
         yticks=0:length(schedules)+1,
-        legend=(isnothing(time_thresh) ? false : :outertopright),
+        legend=false,
         colorbar=true,
-        size=plot_size
+        size=plot_size,
+        title=title
     )
     yflip!(true)
 
     counter = 1
-    short_flag = true
-    long_flag = true
+    num_rta = 0
     for schedule ∈ schedules
         this_schedule = schedule
         annot_xs = []
@@ -272,7 +286,7 @@ function plotVSP_time(
 
         plot!(
             [
-                trips[this_schedule[1], :start_time]-D[1, this_schedule[1]],
+                trips[this_schedule[1], :start_time]-D[1, this_schedule[1]+1],
                 trips[this_schedule[1], :start_time]
             ],
             [counter, counter];
@@ -285,7 +299,7 @@ function plotVSP_time(
         plot!(
             [
                 trips[this_schedule[end], :stop_time],
-                trips[this_schedule[end], :stop_time]+D[this_schedule[end], 1]
+                trips[this_schedule[end], :stop_time]+D[this_schedule[end]+1, 1]
             ],
             [counter, counter];
             label="",
@@ -295,13 +309,21 @@ function plotVSP_time(
             lw = 2
         )
         for (i, trip) ∈ enumerate(this_schedule)
-            trip_long = isnothing(time_thresh) ? false : (trips[trip, :stop_time] - trips[trip, :start_time] > time_thresh)
-            !isnothing(time_thresh) && plot!(
+            if has_dupes && trip > rta_thresh
+                # trip_len = trips[trip, :stop_time] - trips[trip, :start_time]
+                # normal_trip_len = trips[trip - rta_thresh, :stop_time] - trips[trip - rta_thresh, :start_time]
+                # rta = trip_len - normal_trip_len > 1/12
+                rta = true
+                num_rta += 1
+            else
+                rta = false
+            end
+            plot!(
                 [trips[trip, :start_time], trips[trip, :stop_time]],
-                [counter-0.4, counter-0.4];
-                label=(trip_long ? (long_flag ? "> 40 mins" : "") : (short_flag ? "≤ 40 mins" : "")),
-                lc = (trip_long ? :grey15 : :grey65),
-                lw = 2
+                [counter, counter];
+                label="",
+                lc = show_rta && rta ? :deeppink : :black, # Choose the border color, e.g., black
+                lw = show_rta && rta ? 13 : 11      # Set the border width slightly larger than the original line width
             )
             plot!(
                 [trips[trip, :start_time], trips[trip, :stop_time]],
@@ -310,20 +332,15 @@ function plotVSP_time(
                 lc = get(delay_cmap, (s[trip]-clims[1])/(clims[2]-clims[1])),
                 lw = 10
             )
-            if trip_long
-                long_flag = false
-            else
-                short_flag = false                
-            end
             push!(annot_xs, (trips[trip, :start_time]+trips[trip, :stop_time])/2)
             push!(annot_ys, counter)
-            push!(annots, Plots.text(trips[trip, :route_id], 4, :hcenter, :vcenter, :white))
+            push!(annots, Plots.text(trips[trip, :route_id], 6, :hcenter, :vcenter, (s[trip]-clims[1])/(clims[2]-clims[1]) < 0.5 ? :black : :white))
 
             try
                 start = trips[trip, :stop_time]
                 stop = trips[this_schedule[i+1], :start_time]
                 if stop - start < 3
-                    deadhead = D[trip, this_schedule[i+1]]
+                    deadhead = D[trip+1, this_schedule[i+1]+1]
                     plot!(
                         [start, start+deadhead],
                         [counter, counter];
@@ -364,20 +381,32 @@ function plotVSP_time(
 
     gr()
     cmap = cgrad(delay_cmap)
-    heatmap!(
+    l = @layout [
+        a{0.95w} b{0.05w}
+    ]
+    p2 = heatmap(
         rand(2,2),
-        inset=bbox(0.075, 0.15, 0.05, 0.6, :bottom, :right),
-        subplot = 2,
-        clims=(clims[1]*60, clims[2]*60),
+        clims=(clims[1], clims[2]),
         framestyle=:none,
         c=cmap,
         cbar=true,
         lims=(-1,0),
-        colorbar_title=(isnothing(ridership) ? "delay (mins)" : "passenger delay (passenger ⋅ mins)")
+        colorbar_title=(primary ? (sim_no_rta ? "pre-RTA primary delay (passenger-hours)" : "primary delay (passenger-hours)") : "delay (passenger-hours)")
     )
-
-    # return plot(time_plot, p2, layout=l)
-    return time_plot
+    show_rta && println(num_rta / rta_thresh)
+    return plot(time_plot, p2, layout=l)
+    # heatmap!(
+    #     rand(2,2),
+    #     inset=bbox(0.075, 0.15, 0.05, 0.6, :bottom, :right),
+    #     subplot=2,
+    #     clims=(clims[1], clims[2]),
+    #     framestyle=:none,
+    #     c=cmap,
+    #     cbar=true,
+    #     lims=(-1,0),
+    #     colorbar_title=(isnothing(ridership) ? "delay (mins)" : "passenger delay (passenger ⋅ mins)")
+    # )
+    # return time_plot
 end
 
 """
@@ -521,31 +550,21 @@ function feasibleDelays(
     end
 
     if endoftrip
-        s = max.(0, s .+ l)
+        s = max.(0, s .+ l) .* (sum(x, dims=2) .> 0)
     end
 
     return s
 end
 
-function runTimeAnalysis(sol::MCFSolution; percentile = nothing)
-    trips = copy(sol.mod.inst.trips)
-    r = sol.mod.inst.r
-    L_train = sol.mod.inst.L_train
-    L_test = sol.mod.inst.L_test
-    delay_cost = sol.mod.inst.delay_cost
-    op_cost = sol.mod.inst.op_cost
-    if isnothing(percentile)
-        percentile = max.(1 .- op_cost ./ delay_cost ./ r, 0)
-        pushfirst!(percentile, 0)
-    end
+function runTimeAnalysis(
+    trips::DataFrame,
+    r::Vector{Float64},
+    L_train::Matrix{Float64},
+    L_test::Matrix{Float64}
+)
+    instance = VSPInstance(copy(trips), r, copy(L_train), copy(L_test), rta_only = true)
 
-    q = quantile.(eachrow(L_train), percentile)
-    q = max.(mean(L_train, dims=2), q)
-    trips.stop_time .+= q[2:end]
-
-    instance = VSPInstance(trips, r, L_train .- q, L_test .- q)
-
-    rta_model = MCFModel(instance)
+    rta_model = MCFModel(instance, duplicates = false)
     rta_solution = solve!(rta_model)
 
     return rta_solution
