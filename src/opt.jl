@@ -31,6 +31,7 @@ end
     function VSPModel(
         inst::VSPInstance[,
         L_train = nothing,
+        endoftrip = true,
         warmStart = nothing,
         isInt = true,
         multiObj = false,
@@ -81,7 +82,7 @@ function VSPModel(
 
     # decision variable for arc i -> j
     if isInt
-        @variable(model, x[1:n, 1:n] >= 0, Int)
+        @variable(model, x[1:n, 1:n] >= 0, Bin)
     else
         @variable(model, x[1:n, 1:n] >= 0)
     end
@@ -91,7 +92,7 @@ function VSPModel(
     if endoftrip
         @variable(model, s[1:n-1, 1:n_train] >= 0)
     end
-    # nonlinear variable x_ij * d_j
+    # nonlinear variable x_ij * d_i
     @variable(model, ϕ[1:n-1, 1:n-1, 1:n_train] >= 0)
     # warm start with provided solution
     if !isnothing(warmStart)
@@ -110,8 +111,8 @@ function VSPModel(
     @constraint(model, [i = 1:n-1, j = 1:n-1, k = 1:n_train], ϕ[i, j, k] >= d[i, k] - M * (1 - x[i+1, j+1]))
     # end of trip delay
     if endoftrip
-        # @constraint(model, [i = 1:n-1, j = 1:n_train], s[i, j] >= d[i, j] + L_train[i+1, j])  
-        @constraint(model, [i = 1:n-1, j = 1:n_train], s[i, j] >= d[i, j] + sum(x[:, i+1]) * L_train[i+1, j])  
+        @constraint(model, [i = 1:n-1, j = 1:n_train], s[i, j] >= d[i, j] + sum(x[:, i+1]) * L_train[i+1, j])
+        # @constraint(model, [i = 1:n-1, j = 1:n_train], s[i, j] >= sum(ϕ[i, :, j]) + sum(x[:, i+1]) * L_train[i+1, j])
     end  
     # flow constraint
     @constraint(model, [i = 1:n], sum(x[i, :]) - sum(x[:, i]) == 0)
@@ -149,12 +150,14 @@ struct FirstStageProblem
     inst::VSPInstance # VSP instance
     model::JuMP.Model # VSP model
     x::Matrix{VariableRef} # decision variable matrix
-    q::VariableRef # second-stage objective value
+    # q::VariableRef # second-stage objective value
+    q::Vector{VariableRef} # second-stage objective values
 end
 
 """
     FirstStageProblem(
         inst::VSPInstance[,
+        L_train = nothing,
         silent = true,
         outputFlag = 0,
         timeLimit = 60
@@ -165,6 +168,7 @@ Create a first-stage problem object from `inst`.
 """
 function FirstStageProblem(
     inst::VSPInstance;
+    L_train = nothing,
     silent = true,
     outputFlag = 0,
     timeLimit = 60
@@ -176,22 +180,24 @@ function FirstStageProblem(
     set_attribute(model, "OutputFlag", outputFlag)
     set_attribute(model, "TimeLimit", timeLimit)
     n = inst.n
-    M = inst.M
+    L_train = inst.L_train
+    n_train = size(L_train, 2)
     C = inst.C
     G = inst.G
 
     # decision variable for arc i -> j
     @variable(model, x[1:n, 1:n], Bin)
     # second-stage objective
-    @variable(model, q >= 0) # we start with a value of 0
+    # @variable(model, q >= 0) # we start with a value of 0
+    @variable(model, q[1:n_train] >= 0) # we start with a value of 0
     # force non-existant links to 0
     @constraint(model, [i = 1:n, j = 1:n; !G[i, j]], x[i, j] == 0)
     # flow constraint
     @constraint(model, [i = 1:n], sum(x[i, :]) - sum(x[:, i]) == 0)
-    # require each trip is completed
-    @constraint(model, [i = 2:n], sum(x[:, i]) == 1)
+    # require each trip is completed (and no duplicates)
+    @constraint(model, [i = 1:Int((n-1)/2)], sum(x[:, i+1]) + sum(x[:, i+1+Int((n-1)/2)]) == 1)
     # minimize second-stage objective and link costs
-    @objective(model, Min, M * q + sum(C .* x))
+    @objective(model, Min, inst.delay_cost / n_train * sum(q) + sum(C .* x))
 
     return FirstStageProblem(inst, model, x, q)
 end
@@ -208,13 +214,15 @@ Problem (VSP) with propagated delays.
 """
 struct SecondStageProblem
     model::JuMP.Model # VSP model
-    p::Vector{VariableRef} # second-stage dual variables
+    p::Vector{VariableRef} # second-stage dual variable
+    q::Vector{VariableRef} # second-stage dual variable
 end
 
 """
     SecondStageProblem(
         x::Matrix{Float64},
-        inst::VSPInstance[,
+        inst::VSPInstance,
+        s::Int[,
         silent = true,
         outputFlag = 0,
         timeLimit = 60
@@ -222,11 +230,12 @@ end
     )
 
 Create a second-stage problem object with arc decision variables, `x`, from
-the FirstStageProblem and `inst`.
+the FirstStageProblem and `inst`.  `s` is the stochastic scenario.
 """
 function SecondStageProblem(
     x::Matrix{Float64},
-    inst::VSPInstance;
+    inst::VSPInstance,
+    s::Int;
     silent = true,
     outputFlag = 0,
     timeLimit = 60
@@ -238,62 +247,103 @@ function SecondStageProblem(
     set_attribute(model, "OutputFlag", outputFlag)
     set_attribute(model, "TimeLimit", timeLimit)
     set_attribute(model, "InfUnbdInfo", 1) # to return extreme rays
-    n = inst.n
-    l = inst.l
-    B = inst.B
+    fs_x = x[2:end, 2:end]
+    n = inst.n-1
+    L_train = inst.L_train[2:end, s]
+    B = inst.B[2:end, 2:end]
+    r = inst.r
 
     # dual variable associated with each propagated delay constraint
-    @variable(model, p[1:n-1] >= 0)
-    # dual constraint
-    @constraint(model, [i = 2:n], ((2:n .== i) .- x[i, 2:n])' * p <= 1)
+    @variable(model, p[1:n] >= 0)
+    # dual variable associated with each end of trip delay constraint
+    @variable(model, q[1:n] >= 0)
+    # dual constraints
+    @constraint(model, [i = 1:n; sum(fs_x[:, i]) == 0], p[i] == 0)
+    @constraint(model, [i = 1:n; sum(fs_x[:, i]) == 0], q[i] == 0)
+    @constraint(model, [i = 1:n], p[i] - fs_x[i, :]' * p - q[i] <= 0)
+    # @constraint(model, [i = 1:n], p[i] - x[i+1, 2:end]' * p - q[i] * sum(x[2:end, i+1]) <= 0)
+    @constraint(model, [i = 1:n], q[i] <= r[i])
     # dual objective
-    @objective(model, Max, sum([p[i-1] * x[2:n, i]' * (l[2:n] .- B[2:n, i]) for i ∈ 2:n]))
+    @objective(model, Max, sum((fs_x' * L_train .- sum((fs_x .* B)', dims=2)) .* p .+ L_train .* q .* sum(fs_x', dims=2)))
+    # @objective(model, Max, sum([p[i] * sum(x[2:end, i+1] .* (L_train[2:end, s] .-  B[2:end, i+1])) + q[i] * L_train[i+1, s] * sum(x[2:end, i+1]) for i ∈ 1:n]))
 
-    return SecondStageProblem(model, p)
+    return SecondStageProblem(model, p, q)
 end
 
 """
-    get_p(x::Matrix{Float64}, obj::Vector{Float64}[, tol::Float64 = 1e-6])
+    get_pq(x::Matrix{Float64}, inst::VSPInstance)
 
-Calculate optimal dual variables for the Bender's decomposition second-stage problem
-of the Vehcile Scheduling Problem (VSP) with propagated delays.
+Calculate optimal dual variables and objective value for the Bender's decomposition second-stage problem
+of the schedule-aware RTA model.
 """
-function get_p(x::Matrix{Float64}, obj::Vector{Float64}; tol::Float64 = 1e-6)
-    n = size(x, 1)
+function get_pq(x::Matrix{Float64}, inst::VSPInstance)
+    L_train = inst.L_train
+    r = inst.r
+    B = inst.B
     x = convert(Matrix{Bool}, round.(x))
     schedules = generate_blocks(x)
-    p = zeros(n-1)
+    p = zeros(Float64, size(L_train))
+    q = zeros(Float64, size(L_train))
+    # q = L_train .> 0
+    obj = 0.0
 
-    for schedule in schedules
-        this_schedule = schedule
-        this_obj = obj[this_schedule]
-        best = 0.0
-        first = 1
-        last = 1
-        s = 1
+    # mask = vec(sum(x, dims=1)) .> 0
+    # q = q .* mask
+    # q = q .* vcat(0, r)
 
-        for i in 1:length(this_obj)
-            curr = ((i-s+1):-1:1)' * this_obj[s:i]
+    for s in schedules
+        t = s[1]+1
+        mask = L_train[t, :] .> 0
+        q[t, mask] .= r[t-1]
+        obj += sum(L_train[t, :] .* q[t, :])
+        length(s) == 1 && continue
 
-            if best + tol < curr
-                best = curr
-                first = s
-                last = i
-            elseif best > tol
-                p[this_schedule[first:last]] .= convert(Vector{Float64}, (last-first+1):-1:1)
-                best = 0.0
-                s = i + 1
-            elseif curr <= tol 
-                s = i + 1
-            end
-        end
+        t = s[end]+1
+        prev_t = s[end-1]+1
+        mask1 = L_train[prev_t, :] .- B[prev_t, t] .> 0
+        mask2 = L_train[prev_t, :] .- B[prev_t, t] .+ L_train[t, :] .> 0
+        mask3 = L_train[t, :] .> 0
+        q[t, mask1 .& mask2] .= r[t-1]
+        q[t, .!mask1 .& mask3] .= r[t-1]
+        p[t, mask1] .= q[t, mask1]
+        obj += sum((L_train[prev_t, :] .- B[prev_t, t]) .* p[t, :]) + sum(L_train[t, :] .* q[t, :])
 
-        if best > 0
-            p[this_schedule[first:last]] .= convert(Vector{Float64}, (last-first+1):-1:1)
+        for i in length(s)-1:-1:2
+            t = s[i]+1
+            prev_t = s[i-1]+1
+            next_t = s[i+1]+1
+            mask1 = L_train[prev_t, :] .- B[prev_t, t] .> 0
+            mask2 = L_train[prev_t, :] .- B[prev_t, t] .+ L_train[t, :] .> 0
+            mask3 = L_train[t, :] .> 0
+            q[t, mask1 .& mask2] .= r[t-1]
+            q[t, .!mask1 .& mask3] .= r[t-1]
+            p[t, mask1] .= p[next_t, mask1] .+ q[t, mask1]
+            obj += sum((L_train[prev_t, :] .- B[prev_t, t]) .* p[t, :]) + sum(L_train[t, :] .* q[t, :])
         end
     end
 
-    return p
+    # for s in schedules
+    #     obj += sum(L_train[s[1]+1, :] .* q[s[1]+1, :])
+    #     length(s) == 1 && continue
+
+    #     t = s[end]+1
+    #     prev_t = s[end-1]+1
+
+    #     mask = L_train[prev_t, :] .- B[prev_t, t] .> 0
+    #     p[t, mask] .= r[t-1] .+ q[t, mask]
+    #     obj += sum((L_train[prev_t, :] .- B[prev_t, t]) .* p[t, :]) + sum(L_train[t, :] .* q[t, :])
+
+    #     for i in length(s)-1:-1:2
+    #         t = s[i]+1
+    #         prev_t = s[i-1]+1
+    #         next_t = s[i+1]+1
+    #         mask = L_train[prev_t, :] .- B[prev_t, t] .> 0
+    #         p[t, mask] .= p[next_t, mask] .+ q[t, mask]
+    #         obj += sum((L_train[prev_t, :] .- B[prev_t, t]) .* p[t, :]) + sum(L_train[t, :] .* q[t, :])
+    #     end
+    # end
+
+    return p, q, obj
 end
 
 # to measure efficiency between custom algorithm and LP
@@ -306,7 +356,7 @@ global get_p_callback_runtimes = []
 At every integer solution of `fs`, add any violated optimality constraints from
 the second-stage problem.
 """
-function add_benders_callback!(fs::FirstStageProblem; silent::Bool = true)
+function add_benders_callback!(fs::FirstStageProblem; silent::Bool = true, tol = 1e-4)
 
     # See Benders progress
 	!silent && unset_silent(fs.model)
@@ -320,23 +370,42 @@ function add_benders_callback!(fs::FirstStageProblem; silent::Bool = true)
 		end
 
         # generate and solve second stage problem
+        S = size(fs.inst.L_train, 2)
         n = fs.inst.n
         this_x = callback_value.(cb_data, fs.x)
-        this_q = callback_value(cb_data, fs.q)
+        Q = callback_value.(cb_data, fs.q)
         # solving via LP - can comment from here ...
-        ss = SecondStageProblem(this_x, fs.inst)
-        optimize!(ss.model)
-        push!(lp_callback_runtimes, solve_time(ss.model))
-        # ... to here to only use algorithmic solution
-        this_obj = [this_x[2:n, i]' * (fs.inst.l[2:n] .- fs.inst.B[2:n, i]) for i ∈ 2:n]
-        this_p = get_p(this_x, this_obj)
-        push!(get_p_callback_runtimes, @elapsed get_p(this_x, this_obj))
-        if sum([this_p[i-1] * this_x[2:n, i]' * (fs.inst.l[2:n] .- fs.inst.B[2:n, i]) for i ∈ 2:n]) > this_q
-            new_cut = @build_constraint(sum([this_p[i-1] * fs.x[2:n, i]' * (fs.inst.l[2:n] .- fs.inst.B[2:n, i]) for i ∈ 2:n]) <= fs.q)
-        else
-            return
+        new_cuts = []
+        this_obj = 0.0
+        this_p = zeros(Float64, size(fs.inst.L_train))
+        this_q = zeros(Float64, size(fs.inst.L_train))
+        for s in 1:S
+            ss = SecondStageProblem(this_x, fs.inst, s)
+            optimize!(ss.model)
+            p = value.(ss.p)
+            this_p[2:end, s] .= p
+            q = value.(ss.q)
+            this_q[2:end, s] .= q
+            this_obj = objective_value(ss.model)
+            if this_obj > Q[s] - tol
+                push!(lp_callback_runtimes, solve_time(ss.model))
+                push!(new_cuts, @build_constraint(
+                    sum((fs.x' * fs.inst.L_train[:, s] .- sum((fs.x .* fs.inst.B)', dims=2)) .* this_p[:, s] .+ fs.inst.L_train[:, s] .* this_q[:, s] .* sum(fs.x', dims=2)) <= fs.q[s]
+                    ))
+            end
         end
-        MOI.submit(fs.model, MOI.LazyConstraint(cb_data), new_cut)
+        # ... to here to only use algorithmic solution
+        # this_p, this_q, this_obj = get_pq(this_x, inst)
+        # push!(get_p_callback_runtimes, @elapsed get_pq(this_x, inst))
+        # if this_obj > Q
+        #     new_cut = @build_constraint(
+        #         sum([sum((fs.x' * fs.inst.L_train[:, s] .- sum((fs.x .* fs.inst.B)', dims=2)) .* this_p[:, s] .+ fs.inst.L_train[:, s] .* this_q[:, s] .* sum(fs.x', dims=2)) for s ∈ 1:S]) <= fs.q
+        #         )
+        # else
+        #     return
+        # end
+        length(new_cuts) > 0 && MOI.submit.(fs.model, MOI.LazyConstraint(cb_data), new_cuts)
+        # MOI.submit(fs.model, MOI.LazyConstraint(cb_data), new_cut)
     end
 
 	set_attribute(

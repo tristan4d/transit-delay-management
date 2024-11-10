@@ -78,8 +78,15 @@ Optimize the first-stage problem model, `mod`.
 function solve!(mod::FirstStageProblem)
     optimize!(mod.model)
     numTrips = mod.inst.n - 1
+    L_train = mod.inst.L_train
+    B = mod.inst.B
+    r = mod.inst.r
     x = value.(mod.x)
-    s = feasibleDelays(x, mod.inst.l, mod.inst.B)
+    s = zeros(Float64, size(L_train))
+    for i in 1:size(L_train, 2)
+        s[:, i] .= feasibleDelays(x, L_train[:, i], B, endoftrip=true)
+        s[2:end, i] .*= r
+    end
     isInt = all(isinteger.(x))
     numVehicles = sum(x[1, :])
 
@@ -88,14 +95,15 @@ function solve!(mod::FirstStageProblem)
     @show isInt
     @show termination_status(mod.model)
     @show objective_value(mod.model)
-    @show value(mod.q)
+    # @show value(mod.q)
     @show solve_time(mod.model)
 
     return VSPSolution(
         numVehicles,
         all(isinteger.(x)),
         x,
-        s,
+        vec(mean(s, dims=2)),
+        vec(std(s, dims=2)),
         objective_value(mod.model),
         solve_time(mod.model),
         mod
@@ -224,9 +232,10 @@ function plotVSP_time(
     clims = nothing,
     primary = false,
     sim_no_rta = false,
+    show_dir = false,
     title = ""
     )
-    trips = instance.trips
+    trips = copy(instance.trips)
     has_dupes = any(v > 1 for (k, v) in countmap(instance.trips.trip_id))
     if has_dupes
         rta_thresh = floor(Int, size(trips, 1) / 2)
@@ -248,6 +257,7 @@ function plotVSP_time(
         s = vec(mean(delays, dims=2))[2:end]
         if sim_no_rta
             s[rta_thresh+1:end] .= s[1:rta_thresh]
+            trips[rta_thresh+1:end, :] .= trips[1:rta_thresh, :]
         end
     else
         this_s = zeros(Float64, size(delays))
@@ -270,6 +280,7 @@ function plotVSP_time(
         ylabel="vehicle schedule",
         yticks=0:length(schedules)+1,
         legend=false,
+        # legend=:outertopright,
         colorbar=true,
         size=plot_size,
         title=title
@@ -310,9 +321,6 @@ function plotVSP_time(
         )
         for (i, trip) ∈ enumerate(this_schedule)
             if has_dupes && trip > rta_thresh
-                # trip_len = trips[trip, :stop_time] - trips[trip, :start_time]
-                # normal_trip_len = trips[trip - rta_thresh, :stop_time] - trips[trip - rta_thresh, :start_time]
-                # rta = trip_len - normal_trip_len > 1/12
                 rta = true
                 num_rta += 1
             else
@@ -321,6 +329,7 @@ function plotVSP_time(
             plot!(
                 [trips[trip, :start_time], trips[trip, :stop_time]],
                 [counter, counter];
+                # label=num_rta < 2 ? (num_rta < 1 ? "original" : "RTA-adjusted") : "",
                 label="",
                 lc = show_rta && rta ? :deeppink : :black, # Choose the border color, e.g., black
                 lw = show_rta && rta ? 13 : 11      # Set the border width slightly larger than the original line width
@@ -334,7 +343,11 @@ function plotVSP_time(
             )
             push!(annot_xs, (trips[trip, :start_time]+trips[trip, :stop_time])/2)
             push!(annot_ys, counter)
-            push!(annots, Plots.text(trips[trip, :route_id], 6, :hcenter, :vcenter, (s[trip]-clims[1])/(clims[2]-clims[1]) < 0.5 ? :black : :white))
+            directions = Dict(
+                0 => "N",
+                1 => "S"
+            )
+            push!(annots, Plots.text("$(trips[trip, :route_id]) $(show_dir ? directions[trips[trip, :direction]] : "")", 6, :hcenter, :vcenter, (s[trip]-clims[1])/(clims[2]-clims[1]) < 0.5 ? :black : :white))
 
             try
                 start = trips[trip, :stop_time]
@@ -391,7 +404,7 @@ function plotVSP_time(
         c=cmap,
         cbar=true,
         lims=(-1,0),
-        colorbar_title=(primary ? (sim_no_rta ? "pre-RTA primary delay (passenger-hours)" : "primary delay (passenger-hours)") : "delay (passenger-hours)")
+        colorbar_title=(primary ? (sim_no_rta ? "pre-RTA primary delay (passenger-mins)" : "primary delay (passenger-mins)") : "passenger delay (passenger-mins)")
     )
     show_rta && println(num_rta / rta_thresh)
     return plot(time_plot, p2, layout=l)
@@ -404,7 +417,7 @@ function plotVSP_time(
     #     c=cmap,
     #     cbar=true,
     #     lims=(-1,0),
-    #     colorbar_title=(isnothing(ridership) ? "delay (mins)" : "passenger delay (passenger ⋅ mins)")
+    #     colorbar_title=(isnothing(ridership) ? "delay (mins)" : "passenger delay (passenger-mins)")
     # )
     # return time_plot
 end
