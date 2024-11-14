@@ -247,10 +247,9 @@ function SecondStageProblem(
     set_attribute(model, "OutputFlag", outputFlag)
     set_attribute(model, "TimeLimit", timeLimit)
     set_attribute(model, "InfUnbdInfo", 1) # to return extreme rays
-    fs_x = x[2:end, 2:end]
     n = inst.n-1
-    L_train = inst.L_train[2:end, s]
-    B = inst.B[2:end, 2:end]
+    L_train = inst.L_train
+    B = inst.B
     r = inst.r
 
     # dual variable associated with each propagated delay constraint
@@ -258,14 +257,14 @@ function SecondStageProblem(
     # dual variable associated with each end of trip delay constraint
     @variable(model, q[1:n] >= 0)
     # dual constraints
-    @constraint(model, [i = 1:n; sum(fs_x[:, i]) == 0], p[i] == 0)
-    @constraint(model, [i = 1:n; sum(fs_x[:, i]) == 0], q[i] == 0)
-    @constraint(model, [i = 1:n], p[i] - fs_x[i, :]' * p - q[i] <= 0)
-    # @constraint(model, [i = 1:n], p[i] - x[i+1, 2:end]' * p - q[i] * sum(x[2:end, i+1]) <= 0)
+    @constraint(model, [i = 1:n; sum(fs_x[i+1, :]) == 0], p[i] == 0)
+    @constraint(model, [i = 1:n; sum(fs_x[i+1, :]) == 0], q[i] == 0)
+    # @constraint(model, [i = 1:n], p[i] - fs_x[i, :]' * p - q[i] <= 0)
+    @constraint(model, [i = 1:n], p[i] - x[i+1, 2:end]' * p - q[i] <= 0)
     @constraint(model, [i = 1:n], q[i] <= r[i])
     # dual objective
-    @objective(model, Max, sum((fs_x' * L_train .- sum((fs_x .* B)', dims=2)) .* p .+ L_train .* q .* sum(fs_x', dims=2)))
-    # @objective(model, Max, sum([p[i] * sum(x[2:end, i+1] .* (L_train[2:end, s] .-  B[2:end, i+1])) + q[i] * L_train[i+1, s] * sum(x[2:end, i+1]) for i ∈ 1:n]))
+    # @objective(model, Max, sum((fs_x' * L_train .- sum((fs_x .* B)', dims=2)) .* p .+ L_train .* q .* sum(fs_x', dims=2)))
+    @objective(model, Max, sum([p[i] * sum(x[2:end, i+1] .* (L_train[2:end, s] .-  B[2:end, i+1])) + q[i] * L_train[i+1, s] * sum(x[:, i+1]) for i ∈ 1:n]))
 
     return SecondStageProblem(model, p, q)
 end
@@ -387,7 +386,7 @@ function add_benders_callback!(fs::FirstStageProblem; silent::Bool = true, tol =
             q = value.(ss.q)
             this_q[2:end, s] .= q
             this_obj = objective_value(ss.model)
-            if this_obj > Q[s] - tol
+            if this_obj > Q[s] + tol
                 push!(lp_callback_runtimes, solve_time(ss.model))
                 push!(new_cuts, @build_constraint(
                     sum((fs.x' * fs.inst.L_train[:, s] .- sum((fs.x .* fs.inst.B)', dims=2)) .* this_p[:, s] .+ fs.inst.L_train[:, s] .* this_q[:, s] .* sum(fs.x', dims=2)) <= fs.q[s]

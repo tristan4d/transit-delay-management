@@ -273,7 +273,7 @@ function plotVSP_time(
     delay_cmap = ColorSchemes.Reds
 
     if isnothing(clims)
-        clims = (0, maximum(s))
+        clims = (0, max(maximum(s), 1))
     end
     time_plot = plot(;
         xlabel="time of day (hours)",
@@ -548,6 +548,7 @@ function feasibleDelays(
     n = size(x, 1)
     s = zeros(Float64, n)
     delays = ones(Float64, n)
+    delays[1] = 0
     iterations = 0
 
     while any(delays .> eps())
@@ -556,7 +557,10 @@ function feasibleDelays(
             break
         end
 
-        delays = [x[:, i]' * (s .+ l .- B[:, i]) - s[i] for i ∈ 1:n]
+        # delays = [x[:, i+1]' * (s .+ l .- B[:, i]) - s[i] for i ∈ 1:n]
+        for i in 1:n-1
+            delays[i+1] = x[:, i+1]' * (s .+ l .- B[:, i+1]) - s[i+1]
+        end
 
         iterations += 1
         s = max.(0, s .+ delays)
