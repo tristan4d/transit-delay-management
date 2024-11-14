@@ -15,8 +15,6 @@ Solution statistics and metrics for minimum cost flow or delay-aware models.
 - `service_cost::Float64`: cost, in monetary units, of the service delivered.
 - `passenger_cost::Float64`: cost, in monetary units, of the total passenger delay.
 - `passenger_cost_err::Tuple{Float64}`: cost confidence interval, in monetary units, of the total passenger delay.
-- `μ::Float64`: the mean (passenger) delay per trip.
-- `μ_err::Float64`: confidence interval of (passenger) delay per trip.
 - `utilization::Float64`: the percent of time spent moving passengers.
 - `deadhead::Float64`: the distance, in minutes, of deadheading in the solution.
 - `metrics::DataFrame`: trip-level metrics.
@@ -29,8 +27,6 @@ struct SolutionStats
     service_cost::Float64
     passenger_cost::Float64
     passenger_cost_err::Tuple{Float64, Float64}
-    μ::Float64
-    μ_err::Tuple{Float64, Float64}
     utilization::Float64
     deadhead::Float64
     metrics::DataFrame
@@ -44,8 +40,8 @@ function getSolutionStats(
     delays = nothing,
     ridership = nothing
 )
-    x = convert(Matrix{Bool}, round.(x))
-    schedules = generate_blocks(x)
+    this_x = convert(Matrix{Bool}, round.(x))
+    schedules = generate_blocks(this_x)
     n = instance.n
     op_cost = instance.op_cost
     delay_cost = instance.delay_cost
@@ -69,7 +65,7 @@ function getSolutionStats(
     this_s = zeros(Float64, n, numScenarios)
 
     for scenario in 1:numScenarios
-        this_s[:, scenario] = feasibleDelays(x, L[:, scenario], B, endoftrip=endoftrip)
+        this_s[:, scenario] = feasibleDelays(this_x, L[:, scenario], B, endoftrip=endoftrip)
         this_s[2:end, scenario] .*= ridership
     end
 
@@ -128,9 +124,9 @@ function getSolutionStats(
         ])
     end
     
-    vehicle_cost = veh_cost * sum(x[1, :])
-    link_cost = sum(C .* x) - vehicle_cost
-    service_cost = sum(sum(x[2:end, :], dims=2) .* (trips[:, :stop_time] .- trips[:, :start_time])) * op_cost
+    vehicle_cost = veh_cost * sum(this_x[1, :])
+    link_cost = sum(C .* this_x) - vehicle_cost
+    service_cost = sum(sum(this_x[2:end, :], dims=2) .* (trips[:, :stop_time] .- trips[:, :start_time])) * op_cost
     passenger_cost = sum(max.(propagated_delays, 0)) * delay_cost
     passenger_cost_lo = sum(max.(propagated_delay_lo, 0)) * delay_cost
     passenger_cost_hi = sum(max.(propagated_delay_hi, 0)) * delay_cost
@@ -147,15 +143,31 @@ function getSolutionStats(
         service_cost,
         passenger_cost,
         (passenger_cost_lo, passenger_cost_hi),
-        mean(this_s[sum(x[2:end, :], dims=2) .> 0, :]) * 60,
-        (
-            quantile(Iterators.flatten(this_s[sum(x[2:end, :], dims=2) .> 0, :]), 0.25),
-            quantile(Iterators.flatten(this_s[sum(x[2:end, :], dims=2) .> 0, :]), 0.75)
-        ),
         1 - total_nis_length / total_duration,
         total_deadhead,
         metrics
     )
+end
+
+function getBestPossibleStats(
+    inst::VSPInstance;
+    train = true
+)
+    sol = nothing
+    obj = 0.0
+    denom = 0
+    for l in eachcol(train ? inst.L_train : inst.L_test)
+        if isnothing(sol)
+            mod = VSPModel(instance; L_train=l)
+        else
+            mod = VSPModel(instance; warmStart=sol, L_train=l)
+        end
+        sol = solve!(mod)
+        obj += sol.objective_value
+        denom += 1
+    end
+
+    return obj / denom
 end
 
 function getDeadhead(s::Vector{Int}, D::Matrix{Float64})

@@ -1,3 +1,4 @@
+using Distributed
 using Graphs
 using GraphPlot
 using Plots
@@ -10,64 +11,68 @@ using Random
 using Statistics
 using StatsBase
 
-"""
-    VSPSolution
+Distributed.@everywhere begin
+    """
+        VSPSolution
 
-Solution of `mod`.
+    Solution of `mod`.
 
-# Fields
-- `numVehicles::Union{Float64, Int}`: number of vehicles required in the solution.
-- `isInt::Bool`: whether the arc decision variables, `x`, are integer or not.
-- `x::Union{Matrix{Float64}, Matrix{Int}}`: arc decision variables.
-- `s::Vector{Float64}`: mean trip delays across all scenarios.
-- `s_err::Vector{Float64}`: standard deviation of trip delays across all scenarios.
-- `objective_value::Union{Float64, Vector{Float64}}`: optimal objective value.
-- `solve_time::Float64`: computation time for the optimization.
-- `mod::Union{VSPModel, FirstStageProblem}`: the optimized model.
-"""
-struct VSPSolution
-    numVehicles::Union{Float64, Int} # number of vehicles used
-	isInt::Bool # whether the solution is integer or not
-	x::Union{Matrix{Float64}, Matrix{Int}} # link decision values
-    s::Vector{Float64} # propagated trip delays
-    s_err::Vector{Float64} # standard deviation of trip delays
-    objective_value::Union{Float64, Vector{Float64}}
-    solve_time::Float64
-    mod::Union{VSPModel, FirstStageProblem}
+    # Fields
+    - `numVehicles::Union{Float64, Int}`: number of vehicles required in the solution.
+    - `isInt::Bool`: whether the arc decision variables, `x`, are integer or not.
+    - `x::Union{Matrix{Float64}, Matrix{Int}}`: arc decision variables.
+    - `s::Vector{Float64}`: mean trip delays across all scenarios.
+    - `s_err::Vector{Float64}`: standard deviation of trip delays across all scenarios.
+    - `objective_value::Union{Float64, Vector{Float64}}`: optimal objective value.
+    - `solve_time::Float64`: computation time for the optimization.
+    - `mod::Union{VSPModel, FirstStageProblem}`: the optimized model.
+    """
+    struct VSPSolution
+        numVehicles::Union{Float64, Int} # number of vehicles used
+        isInt::Bool # whether the solution is integer or not
+        x::Union{Matrix{Float64}, Matrix{Int}} # link decision values
+        s::Vector{Float64} # propagated trip delays
+        s_err::Vector{Float64} # standard deviation of trip delays
+        objective_value::Union{Float64, Vector{Float64}}
+        solve_time::Float64
+        mod::Union{VSPModel, FirstStageProblem}
+    end
 end
 
-"""
-    solve!(mod::VSPModel)
+Distributed.@everywhere begin
+    """
+        solve!(mod::VSPModel)
 
-Optimize the VSP model, `mod`.
-"""
-function solve!(mod::VSPModel; silent=true)
-    optimize!(mod.model)
-    numTrips = mod.inst.n - 1
-    x = value.(mod.x)
-    s = value.(mod.s)
-    isInt = all(isinteger.(x))
-    numVehicles = sum(x[1, :])
+    Optimize the VSP model, `mod`.
+    """
+    function solve!(mod::VSPModel; silent=true)
+        optimize!(mod.model)
+        numTrips = mod.inst.n - 1
+        x = value.(mod.x)
+        s = value.(mod.s)
+        isInt = all(isinteger.(x))
+        numVehicles = sum(x[1, :])
 
-    if !silent
-        @show numTrips
-        @show numVehicles
-        @show isInt
-        @show termination_status(mod.model)
-        @show objective_value(mod.model)
-        @show solve_time(mod.model)
+        if !silent
+            @show numTrips
+            @show numVehicles
+            @show isInt
+            @show termination_status(mod.model)
+            @show objective_value(mod.model)
+            @show solve_time(mod.model)
+        end
+
+        return VSPSolution(
+            numVehicles,
+            all(isinteger.(x)),
+            x,
+            vec(mean(s, dims=2)),
+            vec(std(s, dims=2)),
+            objective_value(mod.model),
+            solve_time(mod.model),
+            mod
+        )
     end
-
-    return VSPSolution(
-        numVehicles,
-        all(isinteger.(x)),
-        x,
-        vec(mean(s, dims=2)),
-        vec(std(s, dims=2)),
-        objective_value(mod.model),
-        solve_time(mod.model),
-        mod
-    )
 end
 
 """
@@ -273,7 +278,7 @@ function plotVSP_time(
     delay_cmap = ColorSchemes.Reds
 
     if isnothing(clims)
-        clims = (0, maximum(s))
+        clims = (0, max(maximum(s), 1))
     end
     time_plot = plot(;
         xlabel="time of day (hours)",
@@ -548,6 +553,7 @@ function feasibleDelays(
     n = size(x, 1)
     s = zeros(Float64, n)
     delays = ones(Float64, n)
+    delays[1] = 0
     iterations = 0
 
     while any(delays .> eps())
@@ -556,7 +562,10 @@ function feasibleDelays(
             break
         end
 
-        delays = [x[:, i]' * (s .+ l .- B[:, i]) - s[i] for i ∈ 1:n]
+        # delays = [x[:, i+1]' * (s .+ l .- B[:, i]) - s[i] for i ∈ 1:n]
+        for i in 1:n-1
+            delays[i+1] = x[:, i+1]' * (s .+ l .- B[:, i+1]) - s[i+1]
+        end
 
         iterations += 1
         s = max.(0, s .+ delays)
@@ -581,4 +590,43 @@ function runTimeAnalysis(
     rta_solution = solve!(rta_model)
 
     return rta_solution
+end
+
+function trimInstance!(
+    inst::VSPInstance;
+    num_scenarios = ceil(Int, size(instance.L_train, 2) * 0.1),
+    parallel = true
+)
+    G = zeros(Bool, size(inst.G))
+    sol = nothing
+    m = size(instance.L_train, 2)
+    if num_scenarios <= m
+        scenarios = sample(1:m, num_scenarios, replace = false)
+    else
+        scenarios = sample(1:m, num_scenarios, replace = true)
+    end
+    if parallel
+        args = [inst.L_train[:, s] for s in scenarios]
+        sols = Distributed.pmap(arg -> solve!(VSPModel(inst; L_train=arg)), args)
+
+        for sol in sols
+            this_x = convert(Matrix{Bool}, round.(sol.x))
+            G .|= this_x
+        end
+    else
+        for s in scenarios
+            if isnothing(sol)
+                mod = VSPModel(instance; L_train=inst.L_train[:, s])
+            else
+                mod = VSPModel(instance; warmStart=sol, L_train=inst.L_train[:, s])
+            end
+            sol = solve!(mod)
+            this_x = convert(Matrix{Bool}, round.(sol.x))
+            G = G .| this_x
+        end
+    end
+
+    inst.G .*= G
+
+    return inst
 end
