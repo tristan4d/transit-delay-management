@@ -140,10 +140,19 @@ end
 
 Optimize the min-cost flow model, `mod`.
 """
-function solve!(mod::MCFModel)
+function solve!(mod::MCFModel; silent = true)
     optimize!(mod.model)
+    numTrips = mod.inst.n - 1
     x = value.(mod.x)
     numVehicles = sum(x[1, :])
+
+    if !silent
+        @show numTrips
+        @show numVehicles
+        @show termination_status(mod.model)
+        @show objective_value(mod.model)
+        @show solve_time(mod.model)
+    end
 
     return MCFSolution(
         numVehicles,
@@ -582,32 +591,41 @@ function runTimeAnalysis(
     trips::DataFrame,
     r::Vector{Float64},
     L_train::Matrix{Float64},
-    L_test::Matrix{Float64}
+    L_test::Matrix{Float64};
+    silent = true,
+    timeLimit = 600
 )
     instance = VSPInstance(copy(trips), r, copy(L_train), copy(L_test), rta_only = true)
 
-    rta_model = MCFModel(instance, duplicates = false)
-    rta_solution = solve!(rta_model)
+    rta_model = MCFModel(instance, duplicates = false, timeLimit=timeLimit)
+    rta_solution = solve!(rta_model; silent = silent)
 
     return rta_solution
 end
 
-function trimInstance!(
+function trimInstance(
     inst::VSPInstance;
-    num_scenarios = ceil(Int, size(instance.L_train, 2) * 0.1),
-    parallel = true
+    num_scenarios = nothing,
+    parallel = true,
+    timeLimit = 3600
 )
     G = zeros(Bool, size(inst.G))
     sol = nothing
-    m = size(instance.L_train, 2)
-    if num_scenarios <= m
-        scenarios = sample(1:m, num_scenarios, replace = false)
+    m = size(inst.L_train, 2)
+    if isnothing(num_scenarios)
+        col_means = mean.(eachcol(inst.L_train))
+        sorted_indices = sortperm(col_means)
+        scenarios = [inst.L_train[:, sorted_indices[1]], inst.L_train[:, sorted_indices[1]]]
+        push!(scenarios, mean.(eachrow(inst.L_train)))
+    elseif num_scenarios <= m
+        indices = sample(1:m, num_scenarios, replace = false)
+        scenarios = [inst.L_train[:, i] for i in indices]
     else
-        scenarios = sample(1:m, num_scenarios, replace = true)
+        indices = sample(1:m, num_scenarios, replace = true)
+        scenarios = [inst.L_train[:, i] for i in indices]
     end
     if parallel
-        args = [inst.L_train[:, s] for s in scenarios]
-        sols = Distributed.pmap(arg -> solve!(VSPModel(inst; L_train=arg)), args)
+        sols = Distributed.pmap(s -> solve!(VSPModel(inst; L_train=s, timeLimit = timeLimit)), scenarios)
 
         for sol in sols
             this_x = convert(Matrix{Bool}, round.(sol.x))
@@ -616,9 +634,9 @@ function trimInstance!(
     else
         for s in scenarios
             if isnothing(sol)
-                mod = VSPModel(instance; L_train=inst.L_train[:, s])
+                mod = VSPModel(inst; L_train=s, timeLimit = timeLimit)
             else
-                mod = VSPModel(instance; warmStart=sol, L_train=inst.L_train[:, s])
+                mod = VSPModel(inst; warmStart=sol, L_train=s, timeLimit = timeLimit)
             end
             sol = solve!(mod)
             this_x = convert(Matrix{Bool}, round.(sol.x))
@@ -626,7 +644,36 @@ function trimInstance!(
         end
     end
 
-    inst.G .*= G
+    this_inst = deepcopy(inst)
+    this_inst.G .*= G
 
-    return inst
+    return this_inst
+end
+
+function getBestPossibleStats(
+    inst::VSPInstance;
+    train = false,
+    parallel = true,
+    timeLimit = 3600
+)
+    if parallel
+        args = eachcol(train ? inst.L_train : inst.L_test)
+        obj = Distributed.pmap(arg -> solve!(VSPModel(inst; L_train=arg, timeLimit=timeLimit)).objective_value, args)
+    else
+        sol = nothing
+        obj = []
+        denom = 0
+        for l in eachcol(train ? inst.L_train : inst.L_test)
+            if isnothing(sol)
+                mod = VSPModel(inst; L_train=l, timeLimit=timeLimit)
+            else
+                mod = VSPModel(inst; warmStart=sol, L_train=l, timeLimit=timeLimit)
+            end
+            sol = solve!(mod)
+            push!(obj, sol.objective_value)
+            denom += 1
+        end
+    end
+        
+    return mean(obj)
 end

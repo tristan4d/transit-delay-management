@@ -88,9 +88,9 @@ Distributed.@everywhere begin
 
         # decision variable for arc i -> j
         if isInt
-            @variable(model, x[1:n, 1:n] >= 0, Bin)
+            @variable(model, x[i = 1:n, j = 1:n] >= 0, Bin)
         else
-            @variable(model, x[1:n, 1:n] >= 0)
+            @variable(model, x[i = 1:n, j = 1:n] >= 0)
         end
         # variable for propagated delay at trip i
         @variable(model, d[1:n-1, 1:n_train] >= 0)
@@ -99,7 +99,7 @@ Distributed.@everywhere begin
             @variable(model, s[1:n-1, 1:n_train] >= 0)
         end
         # nonlinear variable x_ij * d_i
-        @variable(model, ϕ[1:n-1, 1:n-1, 1:n_train] >= 0)
+        @variable(model, ϕ[i = 1:n-1, j = 1:n-1, k in 1:n_train] >= 0)
         # warm start with provided solution
         if !isnothing(warmStart)
             set_start_value.(x, warmStart.x)
@@ -113,9 +113,9 @@ Distributed.@everywhere begin
         # linear version
         @constraint(model, [i = 1:n-1, j = 1:n_train], d[i, j] >= sum(ϕ[:, i, j] .+ x[2:end, i+1] .* (L_train[2:end, j] .- B[2:end, i+1])))
         # McCormick constraints for nonlinear variable
-        @constraint(model, [i = 1:n-1, j = 1:n-1, k = 1:n_train], ϕ[i, j, k] <= M * x[i+1, j+1])
-        @constraint(model, [i = 1:n-1, j = 1:n-1, k = 1:n_train], ϕ[i, j, k] <= d[i, k])
-        @constraint(model, [i = 1:n-1, j = 1:n-1, k = 1:n_train], ϕ[i, j, k] >= d[i, k] - M * (1 - x[i+1, j+1]))
+        @constraint(model, [i = 1:n-1, j = 1:n-1, k = 1:n_train; G[i+1, j+1]], ϕ[i, j, k] <= M * x[i+1, j+1])
+        @constraint(model, [i = 1:n-1, j = 1:n-1, k = 1:n_train; G[i+1, j+1]], ϕ[i, j, k] <= d[i, k])
+        @constraint(model, [i = 1:n-1, j = 1:n-1, k = 1:n_train; G[i+1, j+1]], ϕ[i, j, k] >= d[i, k] - M * (1 - x[i+1, j+1]))
         # end of trip delay
         if endoftrip
             @constraint(model, [i = 1:n-1, j = 1:n_train], s[i, j] >= d[i, j] + sum(x[:, i+1]) * L_train[i+1, j])

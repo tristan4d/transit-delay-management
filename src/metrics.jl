@@ -149,27 +149,6 @@ function getSolutionStats(
     )
 end
 
-function getBestPossibleStats(
-    inst::VSPInstance;
-    train = true
-)
-    sol = nothing
-    obj = 0.0
-    denom = 0
-    for l in eachcol(train ? inst.L_train : inst.L_test)
-        if isnothing(sol)
-            mod = VSPModel(instance; L_train=l)
-        else
-            mod = VSPModel(instance; warmStart=sol, L_train=l)
-        end
-        sol = solve!(mod)
-        obj += sol.objective_value
-        denom += 1
-    end
-
-    return obj / denom
-end
-
 function getDeadhead(s::Vector{Int}, D::Matrix{Float64})
     time = 0.0
 

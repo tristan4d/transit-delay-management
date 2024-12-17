@@ -7,6 +7,7 @@ using Distributions
 using JLD2
 using LinearAlgebra
 using Random
+using Statistics
 
 """
     string2time(s::String15)
@@ -281,7 +282,8 @@ function getHistoricalDelays(
     n::Int;
     randomSeed = nothing,
     split = 1.0,
-    multi = 1.0
+    multi = 1.0,
+    test_shift = 0.0
 )
     L = zeros(Float64, size(trips, 1), n)
     if !isnothing(randomSeed)
@@ -329,6 +331,11 @@ function getHistoricalDelays(
             print(trip)
         end
 
+        subset_mean = mean(subset)
+        subset .-= subset_mean
+        subset .*= sqrt(multi)
+        subset .+= subset_mean
+
         if n > length(subset)
             L[i, :] = sample(subset, n, replace=true)
         else
@@ -337,8 +344,8 @@ function getHistoricalDelays(
     end
 
     n_train = sample(1:n, Int(n*split), replace = false)
-    L_train = L[:, n_train] .* multi
-    L_test = L[:, Not(n_train)] .* multi
+    L_train = L[:, n_train]
+    L_test = L[:, Not(n_train)] .+ test_shift
 
     return L_train, L_test
 end
