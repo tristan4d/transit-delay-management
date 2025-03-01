@@ -41,7 +41,7 @@ Load and transform GTFS data located at `path` with respect to the current direc
 Returns two DataFrames.  The first include trip-level information while the second
 includes shape-level information.
 """
-function loadGTFS(path::String)
+function loadGTFS(path::String, historical_data)
     # load dataframes for gtfs files
     folder = joinpath(@__DIR__(), path)
     trips = CSV.read(joinpath(folder, "trips.txt"), DataFrames.DataFrame)
@@ -54,7 +54,7 @@ function loadGTFS(path::String)
     trips_df = @chain trips begin
         # @subset (:service_id .== 2015) # manual filter for Nanaimo
         # @subset (:service_id .== 2086) # manual filter for Cranbrook
-        @subset (:service_id .== 593) # manual filter for Victoria
+        @subset (:service_id .== 595) # manual filter for Victoria
         @rename :direction = :direction_id
         @transform (@byrow :route_id =
             routes[routes.route_id.==:route_id, :].route_short_name[1])
@@ -95,6 +95,33 @@ function loadGTFS(path::String)
         sort(_, [:block_id, :start_time])
     end
 
+    route_class_dict = Dict(
+        row.route => row.route_class for row in eachrow(unique(historical_data, [:route, :route_class]))
+    )
+    route_dir_dict = Dict(
+        row1.route => Dict(
+            row2.direction => row2.direction_code for row2 in eachrow(unique(historical_data[historical_data.route .== row1.route, [:direction, :direction_code]]))
+        ) for row1 in eachrow(unique(historical_data, [:route]))
+    )
+    trips_df.route_class = [string(route) in keys(route_class_dict) ? route_class_dict[string(route)] : nothing for route in trips_df.route_id];
+    trips_df.direction_code_full = [string(row.route_id) in keys(route_dir_dict) ? 
+        row.direction in keys(route_dir_dict[string(row.route_id)]) ? route_dir_dict[string(row.route_id)][row.direction] : nothing : nothing
+        for row in eachrow(trips_df)
+    ]
+    dir_dict = Dict(
+        "Inbound" => "IB",
+        "Outbound" => "OB",
+        "North" => "N",
+        "South" => "S",
+        "East" => "E",
+        "West" => "W",
+        "Clockwise" => "CW",
+        "Counterclockwise" => "CCW",
+        "Counterclo" => "CCW",
+        nothing => "?"
+    )
+    trips_df.direction_code = [dir_dict[code] for code in trips_df.direction_code_full]
+
     grouped_shapes = groupby(shapes, :shape_id)
     shape_pts = Vector{Vector{Tuple{Float64, Float64}}}()
     shape_dist_traveled = Float64[]
@@ -129,7 +156,7 @@ end
 
 Load and historical data located at `path` with respect to the current directory.
 """
-function loadHistoricalData(path::String; normalize = false)
+function loadHistoricalData(path::String)
     # load dataframe for historical data
     file = joinpath(@__DIR__(), path)
     df = CSV.read(file, DataFrames.DataFrame)
@@ -139,39 +166,35 @@ function loadHistoricalData(path::String; normalize = false)
         Date(2023, 9, 30), # truth and reconciliation
         Date(2023, 10, 9), # thanksgiving
         Date(2023, 11, 11), # remembrance day
+        Date(2024, 9, 2), # labour day
+        Date(2024, 9, 30), # truth and reconciliation
+        Date(2024, 10, 14), # thanksgiving
+        Date(2024, 11, 11), # remembrance day
     ]
 
     is_holiday = [date in holidays for date in df.date]
     if eltype(df.date) != Dates.Date
         df.date = Dates.Date.(df.date, dateformat"m/d/y")
     end
-    is_weekday = Dates.dayofweek.(df.date) .< 5
+    dow_dict = Dict(
+        "Monday" => 1,
+        "Tuesday" => 2,
+        "Wednesday" => 3,
+        "Thursday" => 4,
+        "Friday" => 5,
+        "Saturday" => 6,
+        "Sunday" => 7,
+    )
+    is_weekday = Dates.dayofweek.(df.date) .> 1 .&& Dates.dayofweek.(df.date) .< 5 .&& [Dates.dayofweek(d) == dow_dict[df.day[i]] for (i, d) in enumerate(df.date)]
+    df.dow = Dates.dayofweek.(df.date)
+    df.day_from_dict = [dow_dict[d] for d in df.day]
     df = df[.!is_holiday .& is_weekday, :]
+    df.hour_of_day = Dates.hour.(df.planned_start_time)
+    df.hour_of_day = [h == 0 ? 24 : h for h in df.hour_of_day]
+    df.direction_code = df.direction
     df.direction = [(d in ["Inbound", "North", "Clockwise", "East"] ? false : true) for d in df.direction]
-    df.planned_start_hour = Dates.hour.(df.planned_start_time)
-    df[df.planned_start_hour .== 0, :planned_start_hour] .= 24;
+    df.planned_start_hour = Dates.hour.(df.planned_start_time) .+ Dates.minute.(df.planned_start_time) ./ 60 .+ Dates.second.(df.planned_start_time) ./ 3600
     df.primary_delay_hours = (df.end_delay_seconds - df.start_delay_seconds) / 3600
-
-    if normalize
-        grouped_df = DataFrames.groupby(df, [:route, :planned_start_hour, :direction])
-        combined_df = combine(
-            grouped_df,
-            :total_boardings => mean => :ridership_μ,
-            :total_boardings => std => :ridership_σ,
-            :primary_delay_hours => mean => :primary_μ,
-            :start_delay_seconds => mean => :secondary_μ,
-            :primary_delay_hours => std => :primary_σ,
-            :start_delay_seconds => std => :secondary_σ
-        )
-    
-        for trip in eachrow(df)
-            for row in eachrow(combined_df)
-                if trip.route == row.route && trip.planned_start_hour == row.planned_start_hour && trip.direction == row.direction
-                    trip.primary_delay_hours += max(-row.primary_μ, 0)
-                end
-            end
-        end
-    end
 
     return df
 end
@@ -278,74 +301,116 @@ factor.  Matches trips to delay data by route number, direction, and trip start 
 """
 function getHistoricalDelays(
     trips::DataFrame,
-    data::DataFrame,
-    n::Int;
+    data::DataFrame;
+    n = nothing,
+    temporal = true,
     randomSeed = nothing,
-    split = 1.0,
-    multi = 1.0,
-    test_shift = 0.0
+    split = 0.5,
+    new_std = nothing,
+    new_mean = nothing,
+    new_test_std = nothing,
+    new_test_mean = nothing,
+    overlap = 0.0
 )
-    L = zeros(Float64, size(trips, 1), n)
     if !isnothing(randomSeed)
         Random.seed!(randomSeed)
     end
+    delays = data.primary_delay_hours
+    unique_dates = keys(filter(x -> all(y -> y in x.route, unique(string.(trips.route_id))), groupby(data, :date)))
+    unique_dates = [date.date for date in unique_dates]
+
+    n_dates = length(unique_dates)
+    if isnothing(n)
+        n = n_dates
+    end
+
+    if temporal
+        unique_dates = sort(unique_dates)
+    else
+        unique_dates = shuffle(unique_dates)
+    end
+    n_train_dates = round(Int, n_dates*split)
+    n_train = round(Int, n*split)
+    n_test = n-n_train
+    n_offset = round(Int, overlap*n_test)
+
+    if temporal
+        train_dates = unique_dates[year.(unique_dates) .== 2023]
+    elseif n_train > n_train_dates
+        train_dates = sample(unique_dates[1:n_train_dates], n_train, replace=true)
+    else
+        train_dates = sample(unique_dates[1:n_train_dates], n_train, replace=false)
+    end
+    L_train = zeros(Float64, size(trips, 1), length(train_dates))
+
+    if temporal
+        test_dates = unique_dates[year.(unique_dates) .== 2024]
+        n_test = length(test_dates)
+        n_offset = round(Int, overlap*n_test)
+        test_dates = sample(test_dates, n_test-n_offset, replace=false)
+        test_dates = append!(test_dates, sample(train_dates, n_offset, replace=false))
+    elseif n_test > n_dates-n_train_dates
+        test_dates = sample(unique_dates[n_train_dates+1-n_offset:end-n_offset], n_test, replace=true)
+    else
+        test_dates = sample(unique_dates[n_train_dates+1-n_offset:end-n_offset], n_test, replace=false)
+    end
+    L_test = zeros(Float64, size(trips, 1), length(test_dates))
 
     for (i, trip) in enumerate(eachrow(trips))
-        subset = data.primary_delay_hours[
-            (data.route .== trip.route_id) .&
-            (data.planned_start_hour .== floor(trip.start_time)) .&
-            (data.direction .== trip.direction)
-        ]
+        for (j, date) in enumerate(train_dates)
+            route_str = string(trip.route_id)
+            mask = (data.route .== route_str) .& (data.direction .== trip.direction) .& (data.date .== date)
 
-        if isempty(subset)
-            subset = data.primary_delay_hours[
-                (data.route .== trip.route_id) .&
-                (data.planned_start_hour .== ceil(trip.start_time)) .&
-                (data.direction .== trip.direction)
-            ]
+            if sum(mask) < 1
+                mask = (data.route .== route_str) .& (data.date .== date)
+            end
+            if sum(mask) < 1
+                error("Route $(route_str) at $(trip.start_time) returned no training results for $date.")
+            end
+
+            subset = delays[mask]
+            start_times = data.planned_start_hour[mask]
+            closest_index = argmin(abs.(start_times .- trip.start_time))
+
+            L_train[i, j] = subset[closest_index]
         end
 
-        if isempty(subset)
-            subset = data.primary_delay_hours[
-                (data.route .== trip.route_id) .&
-                (data.planned_start_hour .== (ceil(trip.start_time) + 1)) .&
-                (data.direction .== trip.direction)
-            ]
-        end
+        for (j, date) in enumerate(test_dates)
+            route_str = string(trip.route_id)
+            mask = (data.route .== route_str) .& (data.direction .== trip.direction) .& (data.date .== date)
 
-        if isempty(subset)
-            subset = data.primary_delay_hours[
-                (data.route .== trip.route_id) .&
-                (data.planned_start_hour .== (floor(trip.start_time) - 1)) .&
-                (data.direction .== trip.direction)
-            ]
-        end
+            if sum(mask) < 1
+                mask = (data.route .== route_str) .& (data.date .== date)
+            end
+            if sum(mask) < 1
+                error("Route $(route_str) at $(trip.start_time) returned no training results for $date.")
+            end
 
-        if isempty(subset)
-            subset = data.primary_delay_hours[
-                (data.route .== trip.route_id)
-            ]
-        end
+            subset = delays[mask]
+            start_times = data.planned_start_hour[mask]
+            closest_index = argmin(abs.(start_times .- trip.start_time))
 
-        if isempty(subset)
-            print(trip)
-        end
-
-        subset_mean = mean(subset)
-        subset .-= subset_mean
-        subset .*= sqrt(multi)
-        subset .+= subset_mean
-
-        if n > length(subset)
-            L[i, :] = sample(subset, n, replace=true)
-        else
-            L[i, :] = sample(subset, n, replace=false)
+            L_test[i, j] = subset[closest_index]
         end
     end
 
-    n_train = sample(1:n, Int(n*split), replace = false)
-    L_train = L[:, n_train]
-    L_test = L[:, Not(n_train)] .+ test_shift
+    train_mean = mean(L_train)
+    train_std = std(L_train)
+    test_mean = mean(L_test)
+    test_std = std(L_test)
+    
+    if !isnothing(new_std)
+        L_train = (L_train .- train_mean) ./ train_std .* new_std ./ 60 .+ train_mean
+        L_test = (L_test .- test_mean) ./ test_std .* new_std ./ 60 .+ test_mean
+    elseif !isnothing(new_test_std)
+        L_test = (L_test .- test_mean) ./ test_std .* new_test_std ./ 60 .+ test_mean
+    end
+    if !isnothing(new_mean)
+        L_train = (L_train .- train_mean) .+ (new_mean / 60)
+        L_test = (L_test .- test_mean) .+ (new_mean / 60)
+    elseif !isnothing(new_test_mean)
+        L_test = (L_test .- test_mean) .+ (new_test_mean / 60)
+    end
 
     return L_train, L_test
 end
@@ -396,39 +461,18 @@ function getHistoricalRidership(
     r = Float64[]
 
     for trip in eachrow(trips)
+        route_str = string(trip.route_id)
         subset = data.total_boardings[
-            (data.route .== trip.route_id) .&
-            (data.planned_start_hour .== floor(trip.start_time)) .&
+            (data.route .== route_str) .&
+            (abs.(data.planned_start_hour .- trip.start_time) .< 1) .&
             (data.direction .== trip.direction)
         ]
 
         if isempty(subset)
             subset = data.total_boardings[
-                (data.route .== trip.route_id) .&
-                (data.planned_start_hour .== ceil(trip.start_time)) .&
+                (data.route .== route_str) .&
+                (abs.(data.planned_start_hour .- trip.start_time) .< 2) .&
                 (data.direction .== trip.direction)
-            ]
-        end
-
-        if isempty(subset)
-            subset = data.total_boardings[
-                (data.route .== trip.route_id) .&
-                (data.planned_start_hour .== (ceil(trip.start_time) + 1)) .&
-                (data.direction .== trip.direction)
-            ]
-        end
-
-        if isempty(subset)
-            subset = data.total_boardings[
-                (data.route .== trip.route_id) .&
-                (data.planned_start_hour .== (floor(trip.start_time) - 1)) .&
-                (data.direction .== trip.direction)
-            ]
-        end
-
-        if isempty(subset)
-            subset = data.total_boardings[
-                (data.route .== trip.route_id)
             ]
         end
 

@@ -22,28 +22,26 @@ function parse_commandline()
         "--debug"
             help = "Check arguments"
             action = :store_true
-        "--normalize"
-            help = "Set mean primary delay to 0"
-            action = :store_true
         "--parallel"
             help = "Use parallel computing"
+            action = :store_true
+        "--temporal"
+            help = "Use time-series train/test split"
             action = :store_true    
+        "--rta_only"
+            help = "Use RTA trips only"
+            action = :store_true    
+        "--original"
+            help = "Use original trips only"
+            action = :store_true
         "--depot"
             help = "Latitude and longitude for depot"
             arg_type = Tuple{Float32, Float32}
             default = (48.440353f0, -123.369201f0)
-        "--num_scenarios"
-            help = "Number of delay scenarios"
-            arg_type = Int
-            default = 100
-        "--multi"
-            help = "Primary delay multiplication factor"
-            arg_type = Float32
-            default = 1.0
         "--split"
             help = "Train-test split"
             arg_type = Float32
-            default = 0.8
+            default = 0.75
         "--seed"
             help = "Random seed"
             arg_type = Int
@@ -52,13 +50,26 @@ function parse_commandline()
             help = "Time limit for full model in seconds"
             arg_type = Int
             default = 3600
+        "--method"
+            help = "LP solution algorithm"
+            arg_type = Int
+            default = -1
+        "--delay_cost"
+            help = "Cost per passenger-hour of delay"
+            arg_type = Float32
+        "--orig_thresh"
+            help = "Percentage of original trips that must be used"
+            arg_type = Float32
         "--stop_time"
             help = "End of the planning horizon"
             arg_type = Int
         "--start_time"
             help = "Start of the planning horizon"
             arg_type = Int
-        "routes"
+        "--max_vehicles"
+            help = "Use the same number of vehicles as the minimum operational cost solution + max_vehicles"
+            arg_type = Int
+        "--routes"
             help = "Routes to be used (e.g., [1,2,3])"
             arg_type = Vector{Int}  # Custom type
             required = true
@@ -72,7 +83,24 @@ function main()
     routes_str = join(args["routes"], "-")
     start_time_str = isnothing(args["start_time"]) ? "" : "a$(args["start_time"])"
     stop_time_str = isnothing(args["stop_time"]) ? "" : "b$(args["stop_time"])"
-    filename = "victoria_$(routes_str)$(start_time_str)$(stop_time_str)_$(args["num_scenarios"])-$(args["split"])_$(args["multi"])_$(args["seed"]).jld2"
+    orig_thresh_str = isnothing(args["orig_thresh"]) ? "" : "_$(args["orig_thresh"])_min_original"
+    delay_cost_str = isnothing(args["delay_cost"]) ? "" : "_\$$(args["delay_cost"])"
+    max_vehicles_str = isnothing(args["max_vehicles"]) ? "" : "_plus$(args["max_vehicles"])veh"
+    data_folder = joinpath(@__DIR__(), "data/objects")
+    log_folder = joinpath(@__DIR__(), "outputs")
+    filename = "$(routes_str)$(start_time_str)$(stop_time_str)$(
+        args["original"] ? "_original" : args["rta_only"] ? "_rta_only" : ""
+    )$(
+        args["temporal"] ? "_temporal" : ""
+    )$(
+        isnothing(args["orig_thresh"]) ? "" : orig_thresh_str
+    )$(
+        isnothing(args["delay_cost"]) ? "" : delay_cost_str
+    )$(
+        isnothing(args["max_vehicles"]) ? "" : max_vehicles_str
+    )"
+    log_file = joinpath(log_folder, filename * ".log")
+    data_file = joinpath(data_folder, filename * ".jld2")
     if args["debug"]
         println("Parsed args:")
         for (arg, val) in args
@@ -83,81 +111,53 @@ function main()
         return 0
     end
 
-    full_time = args["time_limit"]
-    mean_time = max(60, ceil(Int, full_time / (args["num_scenarios"] * args["split"])))
-    easy_time = max(60, ceil(Int, mean_time / 10))
+    @assert !(args["original"] && args["rta_only"]) "Must select either rta or original trips."
 
-    trips, _ = loadGTFS("../data/Victoria-GTFS")
-    historical_data = loadHistoricalData("../data/victoria_ridership_fall_2023.csv"; normalize = args["normalize"])
+    time_limit = args["time_limit"]
+
+    historical_data = loadHistoricalData("../data/victoria_data.csv")
+    trips, _ = loadGTFS("../data/Victoria-GTFS", historical_data)
     
     vic_depot = args["depot"]
     trips_subset = subsetGTFS(trips; routes = args["routes"], start_time = args["start_time"], stop_time = args["stop_time"])
-    L_train, L_test = getHistoricalDelays(trips_subset, historical_data, args["num_scenarios"], split = args["split"], multi = args["multi"], randomSeed = args["seed"])
+    L_train, L_test = getHistoricalDelays(trips_subset, historical_data; temporal = args["temporal"], split = args["split"], randomSeed = args["seed"])
     r = getHistoricalRidership(trips_subset, historical_data)
-    instance = VSPInstance(trips_subset, r, L_train, L_test; depot_loc = vic_depot)
-    trim_instance = trimInstance(instance; timeLimit=mean_time, parallel=args["parallel"])
-    mcf_instance = VSPInstance(trips_subset, r, L_train, L_test; depot_loc = vic_depot, original = true)
-    model = MCFModel(mcf_instance; timeLimit = easy_time, duplicates = false)
-    println("=== MCF Model ===")
-    solution = solve!(model; silent = false)
-    mcf_x = solution.x
-    mcf_sol_time = solution.solve_time
-    mcf_status = termination_status(solution.mod.model)
-    model = MCFModel(instance; timeLimit = easy_time)
-    println("=== MCFRTA Model ===")
-    solution = solve!(model, silent = false)
-    mcfrta_x = solution.x
-    mcfrta_sol_time = solution.solve_time
-    mcfrta_status = termination_status(solution.mod.model)
-    model = VSPModel(instance; warmStart = solution, L_train = mean(instance.L_train, dims = 2), timeLimit = mean_time, endoftrip = true)
-    println("=== Mean Model ===")
-    solution = solve!(model; silent = false)
-    mean_x = solution.x
-    mean_sol_time = solution.solve_time
-    mean_status = termination_status(solution.mod.model)
-    model = VSPModel(trim_instance; warmStart = solution, timeLimit = full_time, endoftrip = true)
-    println("=== Pruned Model ===")
-    solution = solve!(model; silent = false)
-    trim_x = solution.x
-    trim_sol_time = solution.solve_time
-    trim_status = termination_status(solution.mod.model)
-    model = VSPModel(instance; warmStart = solution, timeLimit = full_time, endoftrip = true)
-    println("=== Full Model ===")
-    solution = solve!(model; silent = false)
-    del_x = solution.x
-    del_sol_time = solution.solve_time
-    del_status = termination_status(solution.mod.model)
-    println("=== RTA Model ===")
-    solution = runTimeAnalysis(trips_subset, r, L_train, L_test; silent = false, timeLimit=easy_time)
-    rta_x = solution.x
-    rta_sol_time = solution.solve_time
-    rta_status = termination_status(solution.mod.model)
+    if !isnothing(args["orig_thresh"])
+        orig_thresh = round(Int, size(trips_subset, 1) * args["orig_thresh"])
+    else
+        orig_thresh = nothing
+    end
+    println("=== Building instance ===")
+    @time begin
+        if isnothing(args["delay_cost"])
+            instance = VSPInstance(trips_subset, r, L_train, L_test; original = args["original"], rta_only = args["rta_only"], depot_loc = vic_depot)
+        else
+            instance = VSPInstance(trips_subset, r, L_train, L_test; original = args["original"], rta_only = args["rta_only"], depot_loc = vic_depot, delay_cost = args["delay_cost"])
+        end
+    end
+    println("=== Building model ===")
+    @time begin
+        warmStart = solve!(MCFModel(instance; orig_thresh = orig_thresh,  duplicates = !(args["original"] || args["rta_only"]), timeLimit = 3600))
+        if !isnothing(args["max_vehicles"])
+            max_vehicles = warmStart.numVehicles + args["max_vehicles"]
+        else
+            max_vehicles = nothing
+        end
+        model = VSPModel(instance; max_vehicles = max_vehicles, orig_thresh = orig_thresh, warmStart = warmStart, timeLimit = time_limit, endoftrip = true, logFile = log_file, method = args["method"], silent = false)
+        get_current_solution_callback!(model, filename, data_folder)
+    end
+    println("=== Solving model ===")
+    @time begin
+        solution = solve!(model; silent = false)
+    end
     
-    folder = joinpath(@__DIR__(), "data/objects")
     jldsave(
-        joinpath(folder, filename),
+        data_file,
         inst=instance,
-        mcf_inst=mcf_instance,
-        rta_inst=solution.mod.inst,
-        mcf_x=mcf_x,
-        mcf_sol_time = mcf_sol_time,
-        mcf_status=mcf_status,
-        mcfrta_x=mcfrta_x,
-        mcfrta_sol_time = mcfrta_sol_time,
-        mcfrta_status=mcfrta_status,
-        mean_x=mean_x,
-        mean_sol_time=mean_sol_time,
-        mean_status=mean_status,
-        del_x=del_x,
-        del_sol_time=del_sol_time,
-        del_status=del_status,
-        del_x_trim=trim_x,
-        del_sol_time_trim=trim_sol_time,
-        del_status_trim=trim_status,
-        rta_x=rta_x,
-        rta_solve_time=rta_sol_time,
-        rta_status=rta_status,
-        best_cost=getBestPossibleStats(instance; parallel=args["parallel"])
+        x=solution.x,
+        sol_time=solution.solve_time,
+        objective_value=solution.objective_value,
+        status=termination_status(solution.mod.model)
     )
 end
 

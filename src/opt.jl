@@ -26,7 +26,7 @@ Distributed.@everywhere begin
     struct VSPModel
         inst::VSPInstance
         model::JuMP.Model
-        x::Matrix{VariableRef}
+        x::JuMP.Containers.SparseAxisArray{JuMP.VariableRef, 2, Tuple{Int, Int}}
         s::Matrix{VariableRef}
         endoftrip::Bool
     end
@@ -57,12 +57,16 @@ Distributed.@everywhere begin
         inst::VSPInstance;
         L_train = nothing,
         endoftrip = true,
+        max_vehicles = nothing,
+        orig_thresh = nothing,
         warmStart = nothing,
         isInt = true,
         multiObj = false,
         silent = true,
-        outputFlag = 0,
-        timeLimit = 60
+        outputFlag = 1,
+        timeLimit = 60,
+        logFile = nothing,
+        method = -1
     )
         if multiObj
             model = Model(
@@ -75,6 +79,10 @@ Distributed.@everywhere begin
         silent && set_silent(model)
         set_attribute(model, "OutputFlag", outputFlag)
         set_attribute(model, "TimeLimit", timeLimit)
+        set_optimizer_attribute(model, "Method", method)
+        if !isnothing(logFile)
+            set_optimizer_attribute(model, "LogFile", logFile)
+        end
         n = inst.n
         if isnothing(L_train)
             L_train = inst.L_train
@@ -85,12 +93,14 @@ Distributed.@everywhere begin
         C = inst.C
         B = inst.B
         G = inst.G
+        rta_only = inst.rta_only
+        rta_mask = inst.rta_mask
 
         # decision variable for arc i -> j
         if isInt
-            @variable(model, x[i = 1:n, j = 1:n] >= 0, Bin)
+            @variable(model, x[i = 1:n, j = 1:n; G[i, j]] >= 0, Bin)
         else
-            @variable(model, x[i = 1:n, j = 1:n] >= 0)
+            @variable(model, x[i = 1:n, j = 1:n; G[i, j]] >= 0)
         end
         # variable for propagated delay at trip i
         @variable(model, d[1:n-1, 1:n_train] >= 0)
@@ -99,39 +109,57 @@ Distributed.@everywhere begin
             @variable(model, s[1:n-1, 1:n_train] >= 0)
         end
         # nonlinear variable x_ij * d_i
-        @variable(model, ϕ[i = 1:n-1, j = 1:n-1, k in 1:n_train] >= 0)
+        @variable(model, ϕ[i = 1:n-1, j = 1:n-1, k in 1:n_train; G[i+1, j+1]] >= 0)
         # warm start with provided solution
         if !isnothing(warmStart)
-            set_start_value.(x, warmStart.x)
+            for (i, j) in Tuple.(findall(G))
+                set_start_value(x[i, j], warmStart.x[i, j])
+            end
         end
         # force non-existant links to 0
-        @constraint(model, [i = 1:n, j = 1:n; !G[i, j]], x[i, j] == 0)
-        @constraint(model, [i = 1:n-1, j = 1:n-1; !G[i+1, j+1]], ϕ[i, j, :] == 0)
+        # @constraint(model, [i = 1:n, j = 1:n; !G[i, j]], x[i, j] == 0)
+        # @constraint(model, [i = 1:n-1, j = 1:n-1; !G[i+1, j+1]], ϕ[i, j, :] == 0)
         # variable constraints
         # nonlinear version
         # @constraint(model, [i = 1:n-1, j = 1:n_train], d[i, j] >= sum(x[2:end, i+1] .* (d[:, j] .+ L_train[2:end, j] .- B[2:end, i+1])))
         # linear version
-        @constraint(model, [i = 1:n-1, j = 1:n_train], d[i, j] >= sum(ϕ[:, i, j] .+ x[2:end, i+1] .* (L_train[2:end, j] .- B[2:end, i+1])))
+        @constraint(model, [j = 1:n-1, k = 1:n_train], d[j, k] >= sum(ϕ[i, j, k] + x[i+1, j+1] * (L_train[i+1, k] - B[i+1, j+1]) for i in 1:n-1 if G[i+1, j+1]))
         # McCormick constraints for nonlinear variable
-        @constraint(model, [i = 1:n-1, j = 1:n-1, k = 1:n_train], ϕ[i, j, k] <= M * x[i+1, j+1])
-        @constraint(model, [i = 1:n-1, j = 1:n-1, k = 1:n_train], ϕ[i, j, k] <= d[i, k])
-        @constraint(model, [i = 1:n-1, j = 1:n-1, k = 1:n_train], ϕ[i, j, k] >= d[i, k] - M * (1 - x[i+1, j+1]))
+        @constraint(model, [i = 1:n-1, j = 1:n-1, k = 1:n_train; G[i+1, j+1]], ϕ[i, j, k] <= M * x[i+1, j+1])
+        @constraint(model, [i = 1:n-1, j = 1:n-1, k = 1:n_train; G[i+1, j+1]], ϕ[i, j, k] <= d[i, k])
+        @constraint(model, [i = 1:n-1, j = 1:n-1, k = 1:n_train; G[i+1, j+1]], ϕ[i, j, k] >= d[i, k] - M * (1 - x[i+1, j+1]))
         # end of trip delay
         if endoftrip
-            @constraint(model, [i = 1:n-1, j = 1:n_train], s[i, j] >= d[i, j] + sum(x[:, i+1]) * L_train[i+1, j])
+            @constraint(model, [j = 1:n-1, k = 1:n_train], s[j, k] >= d[j, k] + sum(x[i, j+1] for i in 1:n if G[i, j+1]) * L_train[j+1, k])
             # @constraint(model, [i = 1:n-1, j = 1:n_train], s[i, j] >= sum(ϕ[i, :, j]) + sum(x[:, i+1]) * L_train[i+1, j])
         end  
         # flow constraint
-        @constraint(model, [i = 1:n], sum(x[i, :]) - sum(x[:, i]) == 0)
+        @constraint(model, [i = 1:n], sum(x[i, j] for j in 1:n if G[i, j]) - sum(x[j, i] for j in 1:n if G[j, i]) == 0)
         # require each trip is completed (and no duplicates)
-        @constraint(model, [i = 1:Int((n-1)/2)], sum(x[:, i+1]) + sum(x[:, i+1+Int((n-1)/2)]) == 1)
+        if !isnothing(max_vehicles)
+            @constraint(model, sum(x[1, j] for j in 1:n if G[1, j]) <= max_vehicles)
+        end
+        if rta_only
+            @constraint(model, [i = 1:n-1], sum(x[j, i+1] for j in 1:n if G[j, i+1]) == 1)
+        else
+            if !isnothing(orig_thresh)
+                @constraint(model, sum(x[i+1, j+1] for i in 1:n-1-sum(rta_mask) for j in 1:n-1-sum(rta_mask) if G[i+1, j+1]) >= orig_thresh)
+            end
+            @constraint(model, [i = 1:n-1-sum(rta_mask); !rta_mask[i]], sum(x[j, i+1] for j in 1:n if G[j, i+1]) == 1)
+            for (i, rta) in enumerate(rta_mask)
+                if rta
+                    paired_trip = n-sum(rta_mask[i+1:end])
+                    @constraint(model, sum(x[j, i+1] for j in 1:n if G[j, i+1]) + sum(x[j, paired_trip] for j in 1:n if G[j, paired_trip]) == 1)
+                end
+            end
+        end
         # minimize total propagated delay and link costs
         @expression(
             model,
             delay_expr,
             endoftrip ? sum(inst.delay_cost * r' * s) / n_train : sum(inst.delay_cost * r' * d) / n_train
         )
-        @expression(model, cost_expr, sum(C .* x))
+        @expression(model, cost_expr, sum(C[i, j] * x[i, j] for (i, j) in Tuple.(findall(G))))
         if multiObj
             @objective(model, Min, [delay_expr, cost_expr])
         else
@@ -139,6 +167,53 @@ Distributed.@everywhere begin
         end
 
         return VSPModel(inst, model, x, endoftrip ? s : d, endoftrip)
+    end
+end
+
+Distributed.@everywhere begin
+    function get_current_solution_callback!(mod::VSPModel, filename, folder)
+        inst = mod.inst
+        function current_solution_callback(cb_data, cb_where::Cint)
+            status = callback_node_status(cb_data, mod.model)
+            if status != MOI.CALLBACK_NODE_STATUS_INTEGER
+                return  
+            end
+
+            runtime = Ref{Cdouble}()
+            obj = Ref{Cdouble}()
+            bound = Ref{Cdouble}()
+            GRBcbget(cb_data, cb_where, GRB_CB_RUNTIME, runtime)
+            GRBcbget(cb_data, cb_where, GRB_CB_MIPSOL_OBJBST, obj)
+            GRBcbget(cb_data, cb_where, GRB_CB_MIPSOL_OBJBND, bound)
+
+            gap = abs((obj[] - bound[]) / obj[]) * 100
+
+            if gap > 5
+                return
+            end
+
+            Gurobi.load_callback_variable_primal(cb_data, cb_where)
+
+            this_x = zeros(Bool, inst.n, inst.n)
+            for index in eachindex(mod.x)
+                this_x[index...] = round(callback_value(cb_data, mod.x[index]))
+            end
+
+            jldsave(
+                joinpath(folder, filename * "_tmp.jld2"),
+                inst=inst,
+                x=this_x,
+                sol_time=runtime,
+                objective_value=obj,
+                status=status,
+                gap=gap
+            )
+        end
+        MOI.set(
+            mod.model,
+            Gurobi.CallbackFunction(),
+            current_solution_callback
+        )
     end
 end
 
@@ -397,7 +472,7 @@ Model for the Vehicle Scheduling Problem (VSP).
 struct MCFModel
     inst::VSPInstance # VSP instance
     model::JuMP.Model # min cost flow model
-    x::Matrix{VariableRef} # decision variable matrix
+    x::JuMP.Containers.SparseAxisArray{JuMP.VariableRef, 2, Tuple{Int, Int}} # decision variable matrix
 end
 
 """
@@ -413,6 +488,7 @@ Create a min-cost flow model object from `inst`.
 """
 function MCFModel(
     inst::VSPInstance;
+    orig_thresh = nothing,
     duplicates = true,
     silent = true,
     outputFlag = 0,
@@ -425,22 +501,40 @@ function MCFModel(
     n = inst.n
     C = inst.C
     G = inst.G
+    rta_mask = inst.rta_mask
 
     # decision variable for arc i -> j
-    @variable(model, x[1:n, 1:n] >= 0, Int)
+    @variable(model, x[i = 1:n, j = 1:n; G[i, j]] >= 0, Bin)
     # force non-existant links to 0
-    @constraint(model, [i = 1:n, j = 1:n; !G[i, j]], x[i, j] == 0)
+    # @constraint(model, [i = 1:n, j = 1:n; (i, j) in G], x[i, j] == 0)
     # flow constraint
-    @constraint(model, [i = 1:n], sum(x[i, :]) - sum(x[:, i]) == 0)
+    @constraint(model, [i = 1:n], sum(x[i, j] for j in 1:n if G[i, j]) - sum(x[j, i] for j in 1:n if G[j, i]) == 0)
     if duplicates
+        if !isnothing(orig_thresh)
+            @constraint(model, sum(x[i+1, j+1] for i in 1:n-1-sum(rta_mask) for j in 1:n-1-sum(rta_mask) if G[i+1, j+1]) >= orig_thresh)
+        end
         # no duplicates allowed
-        @constraint(model, [i = 1:Int((n-1)/2)], sum(x[:, i+1]) + sum(x[:, i+1+Int((n-1)/2)]) == 1)
+        @constraint(model, [i = 1:n-1-sum(rta_mask); !rta_mask[i]], sum(x[j, i+1] for j in 1:n if G[j, i+1]) == 1)
+        for (i, rta) in enumerate(rta_mask)
+            if rta
+                paired_trip = n-sum(rta_mask[i+1:end])
+                @constraint(model, sum(x[j, i+1] for j in 1:n if G[j, i+1]) + sum(x[j, paired_trip] for j in 1:n if G[j, paired_trip]) == 1)
+            end
+        end
+        # for (i, rta) in enumerate(rta_mask)
+        #     if rta
+        #         paired_trip = n-sum(rta_mask[i+1:end])
+        #         @constraint(model, sum(x[j, i+1] for j in 1:n if G[j, i+1]) + sum(x[j, paired_trip] for j in 1:n if G[j, paired_trip]) == 1)
+        #     else
+        #         @constraint(model, sum(x[j, i+1] for j in 1:n if G[j, i+1]) == 1)
+        #     end
+        # end
     else
         # require each trip is completed
-        @constraint(model, [i = 2:n], sum(x[:, i]) == 1)
+        @constraint(model, [i = 2:n], sum(x[j, i] for j in 1:n if G[j, i]) == 1)
     end
     # minimize total link costs
-    @objective(model, Min, sum(C .* x))
+    @objective(model, Min, sum(C[i, j] * x[i, j] for (i, j) in Tuple.(findall(G))))
 
     return MCFModel(inst, model, x)
 end

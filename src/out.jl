@@ -30,7 +30,7 @@ Distributed.@everywhere begin
     struct VSPSolution
         numVehicles::Union{Float64, Int} # number of vehicles used
         isInt::Bool # whether the solution is integer or not
-        x::Union{Matrix{Float64}, Matrix{Int}} # link decision values
+        x::Matrix{Bool} # link decision values
         s::Vector{Float64} # propagated trip delays
         s_err::Vector{Float64} # standard deviation of trip delays
         objective_value::Union{Float64, Vector{Float64}}
@@ -48,13 +48,18 @@ Distributed.@everywhere begin
     function solve!(mod::VSPModel; silent=true)
         optimize!(mod.model)
         numTrips = mod.inst.n - 1
-        x = value.(mod.x)
+        numScenarios = size(mod.inst.L_train, 2)
+        x = zeros(Bool, mod.inst.n, mod.inst.n)
+        for (i, j) in Tuple.(findall(mod.inst.G))
+            x[i, j] = round(value(mod.x[i, j]))
+        end
         s = value.(mod.s)
         isInt = all(isinteger.(x))
         numVehicles = sum(x[1, :])
 
         if !silent
             @show numTrips
+            @show numScenarios
             @show numVehicles
             @show isInt
             @show termination_status(mod.model)
@@ -129,7 +134,7 @@ Solution of `mod`.
 """
 struct MCFSolution
     numVehicles::Union{Float64, Int} # number of vehicles used
-	x::Union{Matrix{Float64}, Matrix{Int}} # link decision values
+	x::Matrix{Bool} # link decision values
     objective_value::Float64
     solve_time::Float64
     mod::MCFModel
@@ -143,7 +148,10 @@ Optimize the min-cost flow model, `mod`.
 function solve!(mod::MCFModel; silent = true)
     optimize!(mod.model)
     numTrips = mod.inst.n - 1
-    x = value.(mod.x)
+    x = zeros(Bool, mod.inst.n, mod.inst.n)
+    for (i, j) in Tuple.(findall(mod.inst.G))
+        x[i, j] = round(value(mod.x[i, j]))
+    end
     numVehicles = sum(x[1, :])
 
     if !silent
@@ -236,7 +244,7 @@ Colors indicate the secondary passenger delay cost.  The number indicates the ro
 number.
 """
 function plotVSP_time(
-    x::Union{Matrix{Float64}, Matrix{Int}},
+    x::Union{Matrix{Float64}, Matrix{Bool}},
     instance::VSPInstance;
     plot_size = (800, 600),
     endoftrip = true,
@@ -247,15 +255,14 @@ function plotVSP_time(
     primary = false,
     sim_no_rta = false,
     show_dir = false,
+    show_cbar = true,
+    show_ylabel = true,
+    show_xlabel = true,
     title = ""
     )
     trips = copy(instance.trips)
-    has_dupes = any(v > 1 for (k, v) in countmap(instance.trips.trip_id))
-    if has_dupes
-        rta_thresh = floor(Int, size(trips, 1) / 2)
-    else
-        rta_thresh = size(trips, 1)
-    end
+    rta_mask = instance.rta_mask
+    n_original =  size(trips, 1) - sum(rta_mask)
     B = instance.B
     D = instance.D
     x = convert(Matrix{Bool}, round.(x))
@@ -270,8 +277,8 @@ function plotVSP_time(
     if primary
         s = vec(mean(delays, dims=2))[2:end]
         if sim_no_rta
-            s[rta_thresh+1:end] .= s[1:rta_thresh]
-            trips[rta_thresh+1:end, :] .= trips[1:rta_thresh, :]
+            s[n_original+1:end] .= s[rta_mask]
+            trips[n_original+1:end, :] .= trips[rta_mask, :]
         end
     else
         this_s = zeros(Float64, size(delays))
@@ -290,8 +297,8 @@ function plotVSP_time(
         clims = (0, max(maximum(s), 1))
     end
     time_plot = plot(;
-        xlabel="time of day (hours)",
-        ylabel="vehicle schedule",
+        xlabel=show_xlabel ? "time of day (hours)" : "",
+        ylabel=show_ylabel ? "vehicle schedule" : "",
         yticks=0:length(schedules)+1,
         legend=false,
         # legend=:outertopright,
@@ -300,6 +307,8 @@ function plotVSP_time(
         title=title
     )
     yflip!(true)
+
+    rectangle(w, h, x, y) = Plots.Shape(x .+ [0,w,w,0], y .+ [0,0,h,h])
 
     counter = 1
     num_rta = 0
@@ -334,34 +343,21 @@ function plotVSP_time(
             lw = 2
         )
         for (i, trip) ∈ enumerate(this_schedule)
-            if has_dupes && trip > rta_thresh
+            if trip > n_original
                 rta = true
                 num_rta += 1
             else
                 rta = false
             end
             plot!(
-                [trips[trip, :start_time], trips[trip, :stop_time]],
-                [counter, counter];
-                # label=num_rta < 2 ? (num_rta < 1 ? "original" : "RTA-adjusted") : "",
+                rectangle(trips[trip, :stop_time]-trips[trip, :start_time], 0.6, trips[trip, :start_time], counter-0.3),
                 label="",
-                lc = show_rta && rta ? :deeppink : :black, # Choose the border color, e.g., black
-                lw = show_rta && rta ? 13 : 11      # Set the border width slightly larger than the original line width
-            )
-            plot!(
-                [trips[trip, :start_time], trips[trip, :stop_time]],
-                [counter, counter];
-                label="",
-                lc = get(delay_cmap, (s[trip]-clims[1])/(clims[2]-clims[1])),
-                lw = 10
+                lc=show_rta ? (rta ? :deeppink : :black) : :black,
+                c=get(delay_cmap, (s[trip]-clims[1])/(clims[2]-clims[1]))
             )
             push!(annot_xs, (trips[trip, :start_time]+trips[trip, :stop_time])/2)
             push!(annot_ys, counter)
-            directions = Dict(
-                0 => "N",
-                1 => "S"
-            )
-            push!(annots, Plots.text("$(trips[trip, :route_id]) $(show_dir ? directions[trips[trip, :direction]] : "")", 6, :hcenter, :vcenter, (s[trip]-clims[1])/(clims[2]-clims[1]) < 0.5 ? :black : :white))
+            push!(annots, Plots.text("$(trips[trip, :route_id])$(show_dir ? "\n" * trips[trip, :direction_code] : "")", 6, :hcenter, :vcenter, (s[trip]-clims[1])/(clims[2]-clims[1]) < 0.5 ? :black : :white))
 
             try
                 start = trips[trip, :stop_time]
@@ -404,7 +400,8 @@ function plotVSP_time(
         annotate!(annot_xs, annot_ys, annots)
     end
 
-    ylims!(0, counter)
+    ylims!(time_plot, (0, counter))
+    yticks!(time_plot, 1:counter-1)
 
     gr()
     cmap = cgrad(delay_cmap)
@@ -418,22 +415,10 @@ function plotVSP_time(
         c=cmap,
         cbar=true,
         lims=(-1,0),
-        colorbar_title=(primary ? (sim_no_rta ? "pre-RTA primary delay (passenger-mins)" : "primary delay (passenger-mins)") : "passenger delay (passenger-mins)")
+        colorbar_title=(primary ? (sim_no_rta ? "pre-RTA primary delay (passenger-mins)" : "primary delay (passenger-mins)") : "passenger delay (passenger-hours)")
     )
-    show_rta && println(num_rta / rta_thresh)
-    return plot(time_plot, p2, layout=l)
-    # heatmap!(
-    #     rand(2,2),
-    #     inset=bbox(0.075, 0.15, 0.05, 0.6, :bottom, :right),
-    #     subplot=2,
-    #     clims=(clims[1], clims[2]),
-    #     framestyle=:none,
-    #     c=cmap,
-    #     cbar=true,
-    #     lims=(-1,0),
-    #     colorbar_title=(isnothing(ridership) ? "delay (mins)" : "passenger delay (passenger-mins)")
-    # )
-    # return time_plot
+    show_rta && println(num_rta / n_original)
+    return show_cbar ? plot(time_plot, p2, layout=l) : time_plot
 end
 
 """
@@ -606,7 +591,7 @@ end
 function trimInstance(
     inst::VSPInstance;
     num_scenarios = nothing,
-    parallel = true,
+    parallel = false,
     timeLimit = 3600
 )
     G = zeros(Bool, size(inst.G))
@@ -641,6 +626,7 @@ function trimInstance(
             sol = solve!(mod)
             this_x = convert(Matrix{Bool}, round.(sol.x))
             G = G .| this_x
+            GC.gc()
         end
     end
 
@@ -652,28 +638,101 @@ end
 
 function getBestPossibleStats(
     inst::VSPInstance;
-    train = false,
-    parallel = true,
-    timeLimit = 3600
+    delays = nothing,
+    parallel = false,
+    timeLimit = 3600,
+    warm_start = nothing,
+    max_vehicles = nothing
 )
     if parallel
         args = eachcol(train ? inst.L_train : inst.L_test)
-        obj = Distributed.pmap(arg -> solve!(VSPModel(inst; L_train=arg, timeLimit=timeLimit)).objective_value, args)
+        obj = Distributed.pmap(arg -> solve!(VSPModel(inst; L_train=arg, timeLimit=timeLimit, max_vehicles=max_vehicles), silent=true).objective_value, args)
     else
         sol = nothing
         obj = []
-        denom = 0
-        for l in eachcol(train ? inst.L_train : inst.L_test)
-            if isnothing(sol)
-                mod = VSPModel(inst; L_train=l, timeLimit=timeLimit)
+        for l in eachcol(isnothing(delays) ? inst.L_test : delays)
+            if isnothing(warm_start)
+                mod = VSPModel(inst; warmStart=sol, L_train=l, timeLimit=timeLimit, endoftrip=true, method=1, max_vehicles=max_vehicles)
             else
-                mod = VSPModel(inst; warmStart=sol, L_train=l, timeLimit=timeLimit)
+                mod = VSPModel(inst; warmStart=warm_start, L_train=l, timeLimit=timeLimit, endoftrip=true, method=1, max_vehicles=max_vehicles)
             end
-            sol = solve!(mod)
-            push!(obj, sol.objective_value)
-            denom += 1
+            sol = solve!(mod; silent=true)
+            stats = getSolutionStats(sol.x, inst; delays=l)
+            push!(obj, stats.cost)
+            GC.gc()
         end
     end
         
-    return mean(obj)
+    return mean(obj), std(obj), quantile(obj, 0.25), quantile(obj, 0.75)
+end
+
+function run_and_save(
+    trips,
+    routes,
+    historical_data;
+    temporal = false,
+    random_seed = 1,
+    time_limit = 7200,
+    split = 0.5,
+    new_mean = nothing,
+    new_std = nothing,
+    test_mean = nothing,
+    test_std = nothing,
+    overlap = 0.0,
+    depot = (48.440353, -123.369201),
+    max_dist = "mean",
+    max_layover = 1.0,
+    depot_return_wait = 1.0,
+    delay_cost = 36.54,
+    add_vehicles = nothing,
+    silent = true,
+    method = 1,
+    do_rtv = false
+)
+    trips_subset = subsetGTFS(trips; routes=routes)
+    L_train, L_test = getHistoricalDelays(trips_subset, historical_data; temporal=temporal, randomSeed=random_seed, split=split, new_mean=new_mean, new_std=new_std, new_test_mean=test_mean, new_test_std=test_std, overlap=overlap)
+    r = getHistoricalRidership(trips_subset, historical_data)
+    instance = VSPInstance(trips_subset, r, L_train, L_test; depot_loc=depot, max_dist=max_dist, max_layover=max_layover, depot_return_wait=depot_return_wait, delay_cost=delay_cost)
+    if !isnothing(add_vehicles)
+        mcf_model = MCFModel(instance; duplicates=true)
+        mcf_solution = solve!(mcf_model; silent=silent)
+        max_vehicles = mcf_solution.numVehicles + add_vehicles
+    else
+        max_vehicles = nothing
+    end
+    mean_model = VSPModel(instance; L_train=mean(instance.L_train, dims=2), timeLimit=time_limit, endoftrip=true, method=method, max_vehicles=max_vehicles) 
+    mean_solution = solve!(mean_model; silent=silent)
+    full_model = VSPModel(instance; warmStart=mean_solution, timeLimit=time_limit, endoftrip=true, method=method, max_vehicles=max_vehicles)
+    full_solution = solve!(full_model; silent=silent)
+    if do_rtv
+        rtv_instance =  VSPInstance(trips_subset, r, L_train, L_test; depot_loc=depot, max_dist=max_dist, max_layover=max_layover, depot_return_wait=depot_return_wait, delay_cost=delay_cost, rta_only=true)
+        rtv_model = VSPModel(rtv_instance; timeLimit=time_limit, endoftrip=true, method=method)
+        rtv_solution = solve!(rtv_model; silent=silent)
+    end
+    best_cost, best_cost_std, best_cost_lo, best_cost_hi = getBestPossibleStats(instance, warm_start=full_solution, max_vehicles=max_vehicles);
+
+    folder = joinpath(@__DIR__(), "..\\data\\objects")
+    routes_str = join(routes, "-")
+    filename = "$(routes_str)_std_$(new_std).jld2"
+    jldsave(
+        joinpath(folder, filename),
+        inst=instance,
+        rtv_inst=do_rtv ? rtv_instance : nothing,
+        mean_x=mean_solution.x,
+        mean_sol_time=mean_solution.solve_time,
+        mean_status=termination_status(mean_solution.mod.model),
+        mean_obj=mean_solution.objective_value,
+        full_x=full_solution.x,
+        full_sol_time=full_solution.solve_time,
+        full_status=termination_status(full_solution.mod.model),
+        full_obj=full_solution.objective_value,
+        rtv_x=do_rtv ? rtv_solution.x : nothing,
+        rtv_sol_time=do_rtv ? rtv_solution.solve_time : nothing,
+        rtv_status=do_rtv ? termination_status(rtv_solution.mod.model) : nothing,
+        rtv_obj=do_rtv ? rtv_solution.objective_value : nothing,
+        best_cost=best_cost,
+        best_cost_std=best_cost_std,
+        best_cost_lo=best_cost_lo,
+        best_cost_hi=best_cost_hi
+    )
 end

@@ -25,7 +25,9 @@ struct SolutionStats
     vehicle_cost::Float64
     link_cost::Float64
     service_cost::Float64
+    passenger_tt_cost::Float64
     passenger_cost::Float64
+    passenger_cost_std::Float64
     passenger_cost_err::Tuple{Float64, Float64}
     utilization::Float64
     deadhead::Float64
@@ -33,9 +35,9 @@ struct SolutionStats
 end
 
 function getSolutionStats(
-    x::Union{Matrix{Float64}, Matrix{Int}},
-    instance::VSPInstance,
-    shapes::DataFrame;
+    x::Union{Matrix{Float64}, Matrix{Bool}},
+    instance::VSPInstance;
+    shapes = nothing,
     endoftrip = true,
     delays = nothing,
     ridership = nothing
@@ -46,8 +48,10 @@ function getSolutionStats(
     op_cost = instance.op_cost
     delay_cost = instance.delay_cost
     veh_cost = instance.veh_cost
+    rta_mask = instance.rta_mask
     B = instance.B
-    C = instance.C
+    Q = instance.Q
+    C = instance.C .- Q
     D = instance.D
     trips = instance.trips
     propagated_delays = zeros(Float64, n-1)
@@ -69,9 +73,6 @@ function getSolutionStats(
         this_s[2:end, scenario] .*= ridership
     end
 
-    propagated_delays = vec(mean(this_s, dims=2))[2:end]
-    propagated_delay_lo = vec(quantile.(eachrow(this_s), .25))[2:end]
-    propagated_delay_hi = vec(quantile.(eachrow(this_s), .75))[2:end]
     metrics = DataFrame(
         [
             Float64[],
@@ -95,6 +96,9 @@ function getSolutionStats(
         ]
     )
 
+    propagated_delays = vec(mean(this_s, dims=2))[2:end]
+    propagated_delay_lo = vec(quantile.(eachrow(this_s), .25))[2:end]
+    propagated_delay_hi = vec(quantile.(eachrow(this_s), .75))[2:end]
     total_duration = 0.0
     total_nis_length = 0.0
     total_deadhead = 0.0
@@ -126,14 +130,20 @@ function getSolutionStats(
     
     vehicle_cost = veh_cost * sum(this_x[1, :])
     link_cost = sum(C .* this_x) - vehicle_cost
-    service_cost = sum(sum(this_x[2:end, :], dims=2) .* (trips[:, :stop_time] .- trips[:, :start_time])) * op_cost
-    passenger_cost = sum(max.(propagated_delays, 0)) * delay_cost
-    passenger_cost_lo = sum(max.(propagated_delay_lo, 0)) * delay_cost
-    passenger_cost_hi = sum(max.(propagated_delay_hi, 0)) * delay_cost
+    # service_cost = sum(sum(this_x[2:end, :], dims=2) .* (trips[:, :stop_time] .- trips[:, :start_time])) * op_cost
+    service_cost = sum(trips[1:length(rta_mask), :stop_time] .- trips[1:length(rta_mask), :start_time]) * op_cost
+    passenger_tt_cost = sum(Q .* this_x)
+    # passenger_cost = sum(max.(propagated_delays, 0)) * delay_cost
+    passenger_cost = mean(sum(this_s, dims=1)) * delay_cost
+    passenger_cost_std = std(sum(this_s, dims=1)) * delay_cost
+    # passenger_cost_lo = sum(max.(propagated_delay_lo, 0)) * delay_cost
+    passenger_cost_lo = quantile(vec(sum(this_s, dims=1)), 0.25) * delay_cost
+    # passenger_cost_hi = sum(max.(propagated_delay_hi, 0)) * delay_cost
+    passenger_cost_hi = quantile(vec(sum(this_s, dims=1)), 0.75) * delay_cost
 
-    cost = vehicle_cost + link_cost + passenger_cost
-    cost_lo = vehicle_cost + link_cost + passenger_cost_lo
-    cost_hi = vehicle_cost + link_cost + passenger_cost_hi
+    cost = vehicle_cost + link_cost + service_cost + passenger_tt_cost + passenger_cost
+    cost_lo = vehicle_cost + link_cost + service_cost + passenger_tt_cost + passenger_cost_lo
+    cost_hi = vehicle_cost + link_cost + service_cost + passenger_tt_cost + passenger_cost_hi
     
     return SolutionStats(
         cost,
@@ -141,7 +151,9 @@ function getSolutionStats(
         vehicle_cost,
         link_cost,
         service_cost,
+        passenger_tt_cost,
         passenger_cost,
+        passenger_cost_std,
         (passenger_cost_lo, passenger_cost_hi),
         1 - total_nis_length / total_duration,
         total_deadhead,
@@ -183,10 +195,13 @@ end
 function getGeometry(
     s::Vector{Int},
     trips::DataFrame,
-    shapes::DataFrame
+    shapes::Union{DataFrame, Nothing}
 )
     coordinates = GeoInterface.LineString[]
     distance = 0.0
+    if isnothing(shapes)
+        return distance, coordinates
+    end
     for (t, trip) in enumerate(s)
         shape = shapes[shapes.shape_id .== trips[trip, :shape_id], :shape_pts]
 
@@ -207,11 +222,7 @@ function getGeometry(
 end
 
 function compareSchedules(
-    sol_1::Union{VSPSolution, MCFSolution},
-    sol_2::Union{VSPSolution, MCFSolution}
+    xs::Vector{Matrix{Bool}}
 )
-    x_1 = convert(Matrix{Bool}, round.(sol_1.x))
-    x_2 = convert(Matrix{Bool}, round.(sol_2.x))
-
-    return sum(x_1 .& x_2) / sum(x_1 .| x_2)
+    return sum(reduce(.&, xs)) / sum(reduce(.|, xs))
 end
