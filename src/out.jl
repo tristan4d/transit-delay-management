@@ -254,7 +254,10 @@ function plotVSP_time(
     clims = nothing,
     primary = false,
     sim_no_rta = false,
+    y_skip = 1,
+    left_margin = :match,
     show_dir = false,
+    show_trip = false,
     show_cbar = true,
     show_ylabel = true,
     show_xlabel = true,
@@ -299,7 +302,9 @@ function plotVSP_time(
     time_plot = plot(;
         xlabel=show_xlabel ? "time of day (hours)" : "",
         ylabel=show_ylabel ? "vehicle schedule" : "",
-        yticks=0:length(schedules)+1,
+        yticks=(1:length(schedules), [i % y_skip == 0 ? i : "" for i in 1:length(schedules)]),
+        ylims=(0, length(schedules)+1),
+        left_margin=left_margin,
         legend=false,
         # legend=:outertopright,
         colorbar=true,
@@ -346,18 +351,54 @@ function plotVSP_time(
             if trip > n_original
                 rta = true
                 num_rta += 1
+                paired_trip = findall(x -> x, rta_mask)[trip-n_original]
             else
                 rta = false
             end
-            plot!(
-                rectangle(trips[trip, :stop_time]-trips[trip, :start_time], 0.6, trips[trip, :start_time], counter-0.3),
-                label="",
-                lc=show_rta ? (rta ? :deeppink : :black) : :black,
-                c=get(delay_cmap, (s[trip]-clims[1])/(clims[2]-clims[1]))
-            )
-            push!(annot_xs, (trips[trip, :start_time]+trips[trip, :stop_time])/2)
+            if show_rta
+                if rta
+                    plot!(
+                        rectangle(trips[trip, :stop_time]-trips[trip, :start_time], 0.6, trips[trip, :start_time], counter-0.3),
+                        label="",
+                        lc=:blue,
+                        c=:grey
+                    )
+                    plot!(
+                        rectangle(trips[paired_trip, :stop_time]-trips[trip, :start_time], 0.6, trips[trip, :start_time], counter-0.3),
+                        label="",
+                        lc=:blue,
+                        c=get(delay_cmap, (s[trip]-clims[1])/(clims[2]-clims[1]))
+                    )
+                    push!(annot_xs, (trips[trip, :start_time]+trips[paired_trip, :stop_time])/2)
+                else
+                    plot!(
+                        rectangle(trips[trip, :stop_time]-trips[trip, :start_time], 0.6, trips[trip, :start_time], counter-0.3),
+                        label="",
+                        lc=:black,
+                        c=get(delay_cmap, (s[trip]-clims[1])/(clims[2]-clims[1]))
+                    )
+                    push!(annot_xs, (trips[trip, :start_time]+trips[trip, :stop_time])/2)
+                end
+            else
+                plot!(
+                    rectangle(trips[trip, :stop_time]-trips[trip, :start_time], 0.6, trips[trip, :start_time], counter-0.3),
+                    label="",
+                    lc=:black,
+                    c=get(delay_cmap, (s[trip]-clims[1])/(clims[2]-clims[1]))
+                )
+                push!(annot_xs, (trips[trip, :start_time]+trips[trip, :stop_time])/2)
+            end
             push!(annot_ys, counter)
-            push!(annots, Plots.text("$(trips[trip, :route_id])$(show_dir ? "\n" * trips[trip, :direction_code] : "")", 6, :hcenter, :vcenter, (s[trip]-clims[1])/(clims[2]-clims[1]) < 0.5 ? :black : :white))
+            push!(
+                annots,
+                Plots.text(
+                    "$(show_trip ? rta ? paired_trip : trip : trips[trip, :route_id])$(show_dir ? "\n" * trips[trip, :direction_code] : "")",
+                    6,
+                    :hcenter,
+                    :vcenter,
+                    (s[trip]-clims[1])/(clims[2]-clims[1]) < 0.5 ? :black : :white
+                    )
+            )
 
             try
                 start = trips[trip, :stop_time]
@@ -400,8 +441,8 @@ function plotVSP_time(
         annotate!(annot_xs, annot_ys, annots)
     end
 
-    ylims!(time_plot, (0, counter))
-    yticks!(time_plot, 1:counter-1)
+    # ylims!(time_plot, (0, counter))
+    # yticks!(time_plot, 1:counter-1)
 
     gr()
     cmap = cgrad(delay_cmap)
@@ -684,6 +725,7 @@ function run_and_save(
     max_layover = 1.0,
     depot_return_wait = 1.0,
     delay_cost = 36.54,
+    veh_cost = 806.10,
     add_vehicles = nothing,
     silent = true,
     method = 1,
@@ -692,7 +734,7 @@ function run_and_save(
     trips_subset = subsetGTFS(trips; routes=routes)
     L_train, L_test = getHistoricalDelays(trips_subset, historical_data; temporal=temporal, randomSeed=random_seed, split=split, new_mean=new_mean, new_std=new_std, new_test_mean=test_mean, new_test_std=test_std, overlap=overlap)
     r = getHistoricalRidership(trips_subset, historical_data)
-    instance = VSPInstance(trips_subset, r, L_train, L_test; depot_loc=depot, max_dist=max_dist, max_layover=max_layover, depot_return_wait=depot_return_wait, delay_cost=delay_cost)
+    instance = VSPInstance(trips_subset, r, L_train, L_test; depot_loc=depot, max_dist=max_dist, max_layover=max_layover, depot_return_wait=depot_return_wait, delay_cost=delay_cost, veh_cost=veh_cost)
     if !isnothing(add_vehicles)
         mcf_model = MCFModel(instance; duplicates=true)
         mcf_solution = solve!(mcf_model; silent=silent)
@@ -713,7 +755,7 @@ function run_and_save(
 
     folder = joinpath(@__DIR__(), "..\\data\\objects")
     routes_str = join(routes, "-")
-    filename = "$(routes_str)_std_$(new_std).jld2"
+    filename = "$(routes_str)_veh_$(veh_cost).jld2"
     jldsave(
         joinpath(folder, filename),
         inst=instance,

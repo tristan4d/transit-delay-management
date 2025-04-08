@@ -29,9 +29,14 @@ struct SolutionStats
     passenger_cost::Float64
     passenger_cost_std::Float64
     passenger_cost_err::Tuple{Float64, Float64}
+    secondary_delays::Matrix{Float64}
+    end_of_trip_delays::Matrix{Float64}
     utilization::Float64
     deadhead::Float64
-    metrics::DataFrame
+    buffer::Float64
+    buffer_std::Float64
+    buffer_err::Tuple{Float64, Float64}
+    # metrics::DataFrame
 end
 
 function getSolutionStats(
@@ -40,7 +45,9 @@ function getSolutionStats(
     shapes = nothing,
     endoftrip = true,
     delays = nothing,
-    ridership = nothing
+    ridership = nothing,
+    extra_costs = nothing,
+    base_vehicles = nothing
 )
     this_x = convert(Matrix{Bool}, round.(x))
     schedules = generate_blocks(this_x)
@@ -53,8 +60,8 @@ function getSolutionStats(
     Q = instance.Q
     C = instance.C .- Q
     D = instance.D
+    V = instance.V
     trips = instance.trips
-    propagated_delays = zeros(Float64, n-1)
 
     if isnothing(delays)
         L = instance.L_test
@@ -67,72 +74,38 @@ function getSolutionStats(
 
     numScenarios = size(L, 2)
     this_s = zeros(Float64, n, numScenarios)
+    secondary_delays = zeros(Float64, n, numScenarios)
+    end_of_trip_delays = zeros(Float64, n, numScenarios)
 
     for scenario in 1:numScenarios
-        this_s[:, scenario] = feasibleDelays(this_x, L[:, scenario], B, endoftrip=endoftrip)
-        this_s[2:end, scenario] .*= ridership
+        secondary_delays[:, scenario] = feasibleDelays(this_x, L[:, scenario], B, endoftrip=false)
+        end_of_trip_delays[:, scenario] = feasibleDelays(this_x, L[:, scenario], B, endoftrip=true)
+        this_s[2:end, scenario] .= (endoftrip ? end_of_trip_delays[2:end, scenario] : secondary_delays[2:end, scenario]) .* ridership
     end
 
-    metrics = DataFrame(
-        [
-            Float64[],
-            Int[],
-            Float64[],
-            Float64[],
-            Float64[],
-            Float64[],
-            Float64[],
-            Vector{Vector{GeoInterface.LineString}}()
-        ],
-        [
-            "duration",
-            "num_trips",
-            "utilization",
-            (isnothing(ridership) ? "propagated_delay" : "propagated_passenger_delay"),
-            (isnothing(ridership) ? "propagated_delay_err" : "propagated_passenger_delay_err"),
-            "trip_distance",
-            "deadhead",
-            "geometry"
-        ]
-    )
-
-    propagated_delays = vec(mean(this_s, dims=2))[2:end]
-    propagated_delay_lo = vec(quantile.(eachrow(this_s), .25))[2:end]
-    propagated_delay_hi = vec(quantile.(eachrow(this_s), .75))[2:end]
     total_duration = 0.0
     total_nis_length = 0.0
     total_deadhead = 0.0
     for schedule in schedules
-        duration = getBlockLength(schedule, trips, D)
+        duration = getBlockLength(schedule, trips, D, V)
         total_duration += duration
-        num_trips = length(schedule)
-        utilization = 1 - notInServiceLength(schedule, trips, D) / duration
-        total_nis_length += notInServiceLength(schedule, trips, D)
-        propagated_delay = mean(propagated_delays[schedule])
-        propagated_delay_err = std(propagated_delays[schedule])
-        if isnan(propagated_delay_err)
-            propagated_delay_err = 0.0
-        end
-        distance, geometry = getGeometry(schedule, trips, shapes)
+        nis_length = notInServiceLength(schedule, trips, D, V)
+        total_nis_length += nis_length
         deadhead = getDeadhead(schedule, D)
         total_deadhead += deadhead
-        push!(metrics, [
-            duration,
-            num_trips,
-            utilization,
-            propagated_delay,
-            propagated_delay_err,
-            distance,
-            deadhead,
-            geometry
-        ])
     end
+    buffer_mask = .!(V[2:end, 2:end])
+    true_buffers = vec(B[2:end, 2:end][this_x[2:end, 2:end] .* buffer_mask]) .* 60
     
     vehicle_cost = veh_cost * sum(this_x[1, :])
     link_cost = sum(C .* this_x) - vehicle_cost
+    vehicle_cost -= veh_cost * (isnothing(base_vehicles) ? 0 : base_vehicles)
     # service_cost = sum(sum(this_x[2:end, :], dims=2) .* (trips[:, :stop_time] .- trips[:, :start_time])) * op_cost
     service_cost = sum(trips[1:length(rta_mask), :stop_time] .- trips[1:length(rta_mask), :start_time]) * op_cost
     passenger_tt_cost = sum(Q .* this_x)
+    if !isnothing(extra_costs)
+        passenger_tt_cost += extra_costs
+    end
     # passenger_cost = sum(max.(propagated_delays, 0)) * delay_cost
     passenger_cost = mean(sum(this_s, dims=1)) * delay_cost
     passenger_cost_std = std(sum(this_s, dims=1)) * delay_cost
@@ -141,9 +114,9 @@ function getSolutionStats(
     # passenger_cost_hi = sum(max.(propagated_delay_hi, 0)) * delay_cost
     passenger_cost_hi = quantile(vec(sum(this_s, dims=1)), 0.75) * delay_cost
 
-    cost = vehicle_cost + link_cost + service_cost + passenger_tt_cost + passenger_cost
-    cost_lo = vehicle_cost + link_cost + service_cost + passenger_tt_cost + passenger_cost_lo
-    cost_hi = vehicle_cost + link_cost + service_cost + passenger_tt_cost + passenger_cost_hi
+    cost = vehicle_cost + link_cost + passenger_tt_cost + passenger_cost
+    cost_lo = vehicle_cost + link_cost + passenger_tt_cost + passenger_cost_lo
+    cost_hi = vehicle_cost + link_cost + passenger_tt_cost + passenger_cost_hi
     
     return SolutionStats(
         cost,
@@ -155,9 +128,13 @@ function getSolutionStats(
         passenger_cost,
         passenger_cost_std,
         (passenger_cost_lo, passenger_cost_hi),
+        secondary_delays,
+        end_of_trip_delays,
         1 - total_nis_length / total_duration,
-        total_deadhead,
-        metrics
+        total_deadhead * 60,
+        mean(true_buffers),
+        std(true_buffers),
+        (quantile(true_buffers, 0.25), quantile(true_buffers, 0.75))
     )
 end
 
@@ -171,18 +148,29 @@ function getDeadhead(s::Vector{Int}, D::Matrix{Float64})
     return time
 end
 
-function getBlockLength(s::Vector{Int}, trips::DataFrame, D::Matrix{Float64})
+function getBlockLength(s::Vector{Int}, trips::DataFrame, D::Matrix{Float64}, V::Matrix{Bool})
     start = trips[s[1], :start_time]
     stop = trips[s[end], :stop_time]
 
-    return stop - start + D[1, s[1]+1] + D[s[end]+1, 1]
+    total_length = stop - start + D[1, s[1]+1] + D[s[end]+1, 1]
+
+    for i in 1:length(s)-1
+        if V[s[i], s[i+1]]
+            start = trips[s[i], :start_time]
+            stop = trips[s[i+1], :stop_time]
+            total_length -= stop - start + D[s[i], s[i+1]]
+        end
+    end
+
+    return total_length
 end
 
-function notInServiceLength(s::Vector{Int}, trips::DataFrame, D::Matrix{Float64})
+function notInServiceLength(s::Vector{Int}, trips::DataFrame, D::Matrix{Float64}, V::Matrix{Bool})
     nis = D[1,s[1]+1]
     nis += D[s[end]+1, 1]
 
     for i in 1:length(s)-1
+        V[s[i], s[i+1]] && continue
         stop = trips[s[i], :stop_time]
         start = trips[s[i+1], :start_time]
 

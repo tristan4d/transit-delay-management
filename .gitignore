@@ -1,8 +1,8 @@
 # osm file #
 *.pbf
 
-# archived images #
-imgs/archive/
+# images #
+*.png
 
 # data #
 *.txt

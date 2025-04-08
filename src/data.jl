@@ -98,18 +98,19 @@ Distributed.@everywhere begin
 		averageSpeed::Float64 = 30.0,
 		depot_loc = (mean(trips[:, :start_lat]), mean(trips[:, :start_lon]))
 	)
-		n_original = size(trips, 1)
+		this_trips = copy(trips)
+		n_original = size(this_trips, 1)
 		if max_dist == "mean"
 			max_dist = mean(
-				haversine((trips[i, :stop_lat], trips[i, :stop_lon]), (trips[i, :start_lat], trips[i, :start_lon]), 6372.8) for i in 1:n_original
+				haversine((this_trips[i, :stop_lat], this_trips[i, :stop_lon]), (this_trips[i, :start_lat], this_trips[i, :start_lon]), 6372.8) for i in 1:n_original
 			)
 		elseif max_dist == "median"
 			max_dist = median(
-				haversine((trips[i, :stop_lat], trips[i, :stop_lon]), (trips[i, :start_lat], trips[i, :start_lon]), 6372.8) for i in 1:n_original
+				haversine((this_trips[i, :stop_lat], this_trips[i, :stop_lon]), (this_trips[i, :start_lat], this_trips[i, :start_lon]), 6372.8) for i in 1:n_original
 			)
 		elseif max_dist == "max"
 			max_dist = max(
-				haversine((trips[i, :stop_lat], trips[i, :stop_lon]), (trips[i, :start_lat], trips[i, :start_lon]), 6372.8) for i in 1:n_original
+				haversine((this_trips[i, :stop_lat], this_trips[i, :stop_lon]), (this_trips[i, :start_lat], this_trips[i, :start_lon]), 6372.8) for i in 1:n_original
 			)
 		end
 
@@ -133,13 +134,13 @@ Distributed.@everywhere begin
 			q = max.(mean(L_train, dims=2), q)
 			q = max.(0, q)
 			q = vec(q)
-			rta_trips = copy(trips)
+			rta_trips = copy(this_trips)
 			rta_trips.stop_time .+= q
 		
 			if rta_only
 				# replace trips
 				rta_mask = ones(Bool, n_original)
-				trips = rta_trips
+				this_trips = rta_trips
 				# L_train = L_train .- q
 				L_train = subtract_with_conditions!(L_train, q)
 				# L_test = L_test .- q
@@ -148,7 +149,7 @@ Distributed.@everywhere begin
 				# add RTA trips
 				# rta_mask = abs.(q) .> rta_thresh # if rta doesn't change trip time, don't add it
 				rta_mask = q .> rta_thresh # if rta doesn't change trip time, don't add it
-				trips = vcat(trips, rta_trips[rta_mask, :])
+				this_trips = vcat(this_trips, rta_trips[rta_mask, :])
 				# L_train = vcat(L_train, L_train[rta_mask, :] .- q[rta_mask])
 				L_train = vcat(L_train, subtract_with_conditions!(L_train[rta_mask, :], q[rta_mask]))
 				# L_test = vcat(L_test, L_test[rta_mask, :] .- q[rta_mask])
@@ -157,11 +158,12 @@ Distributed.@everywhere begin
 			end
 		else
 			rta_mask = zeros(Bool, n_original)
+			q = zeros(Float64, n_original)
 		end
 		L_train = vcat(zeros(Float64, 1, size(L_train, 2)), L_train)
 		L_test = vcat(zeros(Float64, 1, size(L_test, 2)), L_test)
 
-		n = size(trips, 1) + 1
+		n = size(this_trips, 1) + 1
 		C = zeros(Float64, n, n)
 		Q = zeros(Float64, n, n)
 		C[1, 2:end] .= veh_cost # cost per vehicle
@@ -173,8 +175,8 @@ Distributed.@everywhere begin
 		V = zeros(Bool, n, n)
 
 		for i ∈ 1:n-1
-			D[1, i+1] = haversine(depot_loc, (trips[i, :start_lat], trips[i, :start_lon]), 6372.8) / averageSpeed 
-			D[i+1, 1] = haversine((trips[i, :stop_lat], trips[i, :stop_lon]), depot_loc, 6372.8) / averageSpeed 
+			D[1, i+1] = haversine(depot_loc, (this_trips[i, :start_lat], this_trips[i, :start_lon]), 6372.8) / averageSpeed 
+			D[i+1, 1] = haversine((this_trips[i, :stop_lat], this_trips[i, :stop_lon]), depot_loc, 6372.8) / averageSpeed 
 			C[1, i+1] += D[1, i+1] * op_cost # * 2
 			C[i+1, 1] = D[i+1, 1] * op_cost # * 2
 			if !original && (i > n_original || rta_only)
@@ -183,11 +185,11 @@ Distributed.@everywhere begin
 			end
 			for j ∈ 1:n-1
 				i == j && continue
-				timeDiff = trips[j, :start_time] - trips[i, :stop_time]
+				timeDiff = this_trips[j, :start_time] - this_trips[i, :stop_time]
 				(timeDiff < min_layover || timeDiff > depot_return_thresh+depot_return_wait) && continue
 				timeDiff > max_layover && timeDiff < depot_return_thresh && continue
-				coords_1 = (trips[i, :stop_lat], trips[i, :stop_lon])
-				coords_2 = (trips[j, :start_lat], trips[j, :start_lon])
+				coords_1 = (this_trips[i, :stop_lat], this_trips[i, :stop_lon])
+				coords_2 = (this_trips[j, :start_lat], this_trips[j, :start_lon])
 				distance = haversine(coords_1, coords_2, 6372.8)
 				distance > max_dist && continue
 				D[i+1, j+1] = distance / averageSpeed
@@ -221,7 +223,7 @@ Distributed.@everywhere begin
 		M = max(M, 0)
 		B[2:end, 1] .= M # *infinite* buffer time when returning to depot
 
-		return VSPInstance(n, M, op_cost, delay_cost, veh_cost, L_train, L_test, r, C, Q, B, D, V, G, trips, rta_only, rta_mask)
+		return VSPInstance(n, M, op_cost, delay_cost, veh_cost, L_train, L_test, r, C, Q, B, D, V, G, this_trips, rta_only, rta_mask)
 	end
 end
 

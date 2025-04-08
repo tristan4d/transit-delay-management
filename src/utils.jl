@@ -222,7 +222,7 @@ function subsetGTFS(
     stop_time = nothing,
     randomSeed = 1
 )
-    subset = df
+    subset = copy(df)
     if !isnothing(routes)
         subset = subset[[in(route, routes) for route in subset.route_id], :]
     end
@@ -310,6 +310,8 @@ function getHistoricalDelays(
     new_mean = nothing,
     new_test_std = nothing,
     new_test_mean = nothing,
+    mean_reduc = nothing,
+    std_reduc = nothing,
     overlap = 0.0
 )
     if !isnothing(randomSeed)
@@ -404,12 +406,19 @@ function getHistoricalDelays(
         L_test = (L_test .- test_mean) ./ test_std .* new_std ./ 60 .+ test_mean
     elseif !isnothing(new_test_std)
         L_test = (L_test .- test_mean) ./ test_std .* new_test_std ./ 60 .+ test_mean
+    elseif !isnothing(std_reduc)
+        L_train = (L_train .- train_mean) .* (1-std_reduc) .+ train_mean
+        L_test = (L_test .- test_mean) .* (1-std_reduc) .+ test_mean
     end
+
     if !isnothing(new_mean)
         L_train = (L_train .- train_mean) .+ (new_mean / 60)
         L_test = (L_test .- test_mean) .+ (new_mean / 60)
     elseif !isnothing(new_test_mean)
         L_test = (L_test .- test_mean) .+ (new_test_mean / 60)
+    elseif !isnothing(mean_reduc)
+        L_train[L_train .> 0] .= L_train[L_train .> 0] .* (1-mean_reduc)
+        L_test[L_test .> 0] .= L_test[L_test .> 0] .* (1-mean_reduc)
     end
 
     return L_train, L_test
