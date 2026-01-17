@@ -755,7 +755,7 @@ function run_and_save(
 
     folder = joinpath(@__DIR__(), "..\\data\\objects")
     routes_str = join(routes, "-")
-    filename = "$(routes_str)_veh_$(veh_cost).jld2"
+    filename = "$(routes_str)_std_$(new_std).jld2"
     jldsave(
         joinpath(folder, filename),
         inst=instance,

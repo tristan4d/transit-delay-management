@@ -29,6 +29,7 @@ struct SolutionStats
     passenger_cost::Float64
     passenger_cost_std::Float64
     passenger_cost_err::Tuple{Float64, Float64}
+    extra_cost::Float64
     secondary_delays::Matrix{Float64}
     end_of_trip_delays::Matrix{Float64}
     utilization::Float64
@@ -46,7 +47,7 @@ function getSolutionStats(
     endoftrip = true,
     delays = nothing,
     ridership = nothing,
-    extra_costs = nothing,
+    extra_costs = 0.0,
     base_vehicles = nothing
 )
     this_x = convert(Matrix{Bool}, round.(x))
@@ -103,9 +104,6 @@ function getSolutionStats(
     # service_cost = sum(sum(this_x[2:end, :], dims=2) .* (trips[:, :stop_time] .- trips[:, :start_time])) * op_cost
     service_cost = sum(trips[1:length(rta_mask), :stop_time] .- trips[1:length(rta_mask), :start_time]) * op_cost
     passenger_tt_cost = sum(Q .* this_x)
-    if !isnothing(extra_costs)
-        passenger_tt_cost += extra_costs
-    end
     # passenger_cost = sum(max.(propagated_delays, 0)) * delay_cost
     passenger_cost = mean(sum(this_s, dims=1)) * delay_cost
     passenger_cost_std = std(sum(this_s, dims=1)) * delay_cost
@@ -114,7 +112,7 @@ function getSolutionStats(
     # passenger_cost_hi = sum(max.(propagated_delay_hi, 0)) * delay_cost
     passenger_cost_hi = quantile(vec(sum(this_s, dims=1)), 0.75) * delay_cost
 
-    cost = vehicle_cost + link_cost + passenger_tt_cost + passenger_cost
+    cost = vehicle_cost + link_cost + passenger_tt_cost + passenger_cost + extra_costs
     cost_lo = vehicle_cost + link_cost + passenger_tt_cost + passenger_cost_lo
     cost_hi = vehicle_cost + link_cost + passenger_tt_cost + passenger_cost_hi
     
@@ -128,6 +126,7 @@ function getSolutionStats(
         passenger_cost,
         passenger_cost_std,
         (passenger_cost_lo, passenger_cost_hi),
+        extra_costs,
         secondary_delays,
         end_of_trip_delays,
         1 - total_nis_length / total_duration,
