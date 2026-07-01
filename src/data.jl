@@ -32,11 +32,15 @@ Distributed.@everywhere begin
 		n::Int
 		M::Float64
 		op_cost::Float64
+		idle_cost::Float64
 		delay_cost::Float64
 		veh_cost::Float64
+		tts_ratio::Float64
+		depot_loc::Tuple{Float64, Float64}
 		L_train::Matrix{Float64}
 		L_test::Matrix{Float64}
 		r::Vector{Float64}
+		q::Vector{Float64}
 		C::Matrix{Float64}
 		Q::Matrix{Float64}
 		B::Matrix{Float64}
@@ -45,6 +49,7 @@ Distributed.@everywhere begin
 		G::Matrix{Bool}
 		trips::DataFrame
 		rta_only::Bool
+		original::Bool
 		rta_mask::Vector{Bool}
 	end
 end
@@ -96,7 +101,9 @@ Distributed.@everywhere begin
 		depot_return_thresh = 3.0,
 		depot_return_wait = 1.0,
 		averageSpeed::Float64 = 30.0,
-		depot_loc = (mean(trips[:, :start_lat]), mean(trips[:, :start_lon]))
+		depot_loc = (mean(trips[:, :start_lat]), mean(trips[:, :start_lon])),
+		M=nothing,
+		G=nothing
 	)
 		this_trips = copy(trips)
 		n_original = size(this_trips, 1)
@@ -125,15 +132,16 @@ Distributed.@everywhere begin
 			return L
 		end
 
+		if isnothing(percentile)
+			# percentile = min.(max.(1 .- op_cost ./ delay_cost ./ r, 0), 1)
+			percentile = min.(max.(1 - tts_ratio .- op_cost ./ delay_cost ./ r, 0), 1)
+			# percentile = min.(max.((r .* delay_cost .* (1 - tts_ratio)) ./ (op_cost .+ r .* delay_cost), 0), 1)
+		end
+		q = quantile.(eachrow(L_train), percentile)
+		q = max.(mean(L_train, dims=2), q)
+		q = max.(0, q)
+		q = vec(q)
 		if !original
-			if isnothing(percentile)
-				# percentile = min.(max.(1 .- op_cost ./ delay_cost ./ r, 0), 1)
-				percentile = min.(max.(1 - tts_ratio .- op_cost ./ delay_cost ./ r, 0), 1)
-			end
-			q = quantile.(eachrow(L_train), percentile)
-			q = max.(mean(L_train, dims=2), q)
-			q = max.(0, q)
-			q = vec(q)
 			rta_trips = copy(this_trips)
 			rta_trips.stop_time .+= q
 		
@@ -158,7 +166,6 @@ Distributed.@everywhere begin
 			end
 		else
 			rta_mask = zeros(Bool, n_original)
-			q = zeros(Float64, n_original)
 		end
 		L_train = vcat(zeros(Float64, 1, size(L_train, 2)), L_train)
 		L_test = vcat(zeros(Float64, 1, size(L_test, 2)), L_test)
@@ -168,47 +175,87 @@ Distributed.@everywhere begin
 		Q = zeros(Float64, n, n)
 		C[1, 2:end] .= veh_cost # cost per vehicle
 		B = zeros(Float64, n, n)
-		G = zeros(Bool, n, n)
-		G[1, 2:end] .= 1 # add link from depot to each trip
-		G[2:end, 1] .= 1 # add link from each trip to depot
 		D = zeros(Float64, n, n) # deadhead time between start/stop points
 		V = zeros(Bool, n, n)
-
-		for i ∈ 1:n-1
-			D[1, i+1] = haversine(depot_loc, (this_trips[i, :start_lat], this_trips[i, :start_lon]), 6372.8) / averageSpeed 
-			D[i+1, 1] = haversine((this_trips[i, :stop_lat], this_trips[i, :stop_lon]), depot_loc, 6372.8) / averageSpeed 
-			C[1, i+1] += D[1, i+1] * op_cost # * 2
-			C[i+1, 1] = D[i+1, 1] * op_cost # * 2
-			if !original && (i > n_original || rta_only)
-				C[1, i+1] += q[rta_mask][i-n_original*(!rta_only)] * op_cost
-				Q[1, i+1] += q[rta_mask][i-n_original*(!rta_only)] * delay_cost * tts_ratio * r[i]
+		if !isnothing(G)
+			# Compute D, B, C for depot connections
+			for i ∈ 1:n-1
+				D[1, i+1] = haversine(depot_loc, (this_trips[i, :start_lat], this_trips[i, :start_lon]), 6372.8) / averageSpeed 
+				D[i+1, 1] = haversine((this_trips[i, :stop_lat], this_trips[i, :stop_lon]), depot_loc, 6372.8) / averageSpeed 
+				C[1, i+1] += D[1, i+1] * op_cost
+				C[i+1, 1] = D[i+1, 1] * op_cost
+				if !original && (i > n_original || rta_only)
+					C[1, i+1] += q[rta_mask][i-n_original*(!rta_only)] * op_cost
+					Q[1, i+1] += q[rta_mask][i-n_original*(!rta_only)] * delay_cost * tts_ratio * r[i]
+				end
 			end
-			for j ∈ 1:n-1
-				i == j && continue
-				timeDiff = this_trips[j, :start_time] - this_trips[i, :stop_time]
-				(timeDiff < min_layover || timeDiff > depot_return_thresh+depot_return_wait) && continue
-				timeDiff > max_layover && timeDiff < depot_return_thresh && continue
-				coords_1 = (this_trips[i, :stop_lat], this_trips[i, :stop_lon])
-				coords_2 = (this_trips[j, :start_lat], this_trips[j, :start_lon])
-				distance = haversine(coords_1, coords_2, 6372.8)
-				distance > max_dist && continue
-				D[i+1, j+1] = distance / averageSpeed
-				if distance / averageSpeed <= timeDiff
-					G[i+1, j+1] = 1 # add link if vehicle can deadhead from i -> j
-					B[i+1, j+1] = timeDiff - distance / averageSpeed
-					if timeDiff < depot_return_thresh
-						# C[i+1, j+1] = (distance / averageSpeed + timeDiff) * op_cost # cost per hour
-						C[i+1, j+1] = (distance / averageSpeed) * op_cost + (timeDiff - distance / averageSpeed) * idle_cost # cost per hour
-					else
-						V[i+1, j+1] = 1
-						d1 = haversine(coords_1, depot_loc, 6372.8)
-						d2 = haversine(depot_loc, coords_2, 6372.8)
-						D[i+1, j+1] = (d1+d2) / averageSpeed
-						C[i+1, j+1] = ((d1 + d2) / averageSpeed) * op_cost # * 2 # return to depot
+			# For trip-trip arcs in G, compute D, B, C
+			for i ∈ 1:n-1
+				for j ∈ 1:n-1
+					if G[i+1, j+1]
+						coords_1 = (this_trips[i, :stop_lat], this_trips[i, :stop_lon])
+						coords_2 = (this_trips[j, :start_lat], this_trips[j, :start_lon])
+						distance = haversine(coords_1, coords_2, 6372.8)
+						D[i+1, j+1] = distance / averageSpeed
+						timeDiff = this_trips[j, :start_time] - this_trips[i, :stop_time]
+						if timeDiff < depot_return_thresh
+							B[i+1, j+1] = timeDiff - distance / averageSpeed
+							C[i+1, j+1] = (distance / averageSpeed) * op_cost + (timeDiff - distance / averageSpeed) * idle_cost
+						else
+							V[i+1, j+1] = 1
+							d1 = haversine(coords_1, depot_loc, 6372.8)
+							d2 = haversine(depot_loc, coords_2, 6372.8)
+							D[i+1, j+1] = (d1+d2) / averageSpeed
+							C[i+1, j+1] = ((d1 + d2) / averageSpeed) * op_cost
+						end
+						if !original && (j > n_original || rta_only)
+							C[i+1, j+1] += q[rta_mask][j-n_original*(!rta_only)] * op_cost
+							Q[i+1, j+1] += q[rta_mask][j-n_original*(!rta_only)] * delay_cost * tts_ratio * r[j]
+						end
 					end
-					if !original && (j > n_original || rta_only)
-						C[i+1, j+1] += q[rta_mask][j-n_original*(!rta_only)] * op_cost
-						Q[i+1, j+1] += q[rta_mask][j-n_original*(!rta_only)] * delay_cost * tts_ratio * r[j]
+				end
+			end
+		else
+			G = zeros(Bool, n, n)
+			G[1, 2:end] .= 1 # add link from depot to each trip
+			G[2:end, 1] .= 1 # add link from each trip to depot
+
+			for i ∈ 1:n-1
+				D[1, i+1] = haversine(depot_loc, (this_trips[i, :start_lat], this_trips[i, :start_lon]), 6372.8) / averageSpeed 
+				D[i+1, 1] = haversine((this_trips[i, :stop_lat], this_trips[i, :stop_lon]), depot_loc, 6372.8) / averageSpeed 
+				C[1, i+1] += D[1, i+1] * op_cost # * 2
+				C[i+1, 1] = D[i+1, 1] * op_cost # * 2
+				if !original && (i > n_original || rta_only)
+					C[1, i+1] += q[rta_mask][i-n_original*(!rta_only)] * op_cost
+					Q[1, i+1] += q[rta_mask][i-n_original*(!rta_only)] * delay_cost * tts_ratio * r[i]
+				end
+				for j ∈ 1:n-1
+					i == j && continue
+					timeDiff = this_trips[j, :start_time] - this_trips[i, :stop_time]
+					(timeDiff < min_layover || timeDiff > depot_return_thresh+depot_return_wait) && continue
+					timeDiff > max_layover && timeDiff < depot_return_thresh && continue
+					coords_1 = (this_trips[i, :stop_lat], this_trips[i, :stop_lon])
+					coords_2 = (this_trips[j, :start_lat], this_trips[j, :start_lon])
+					distance = haversine(coords_1, coords_2, 6372.8)
+					distance > max_dist && continue
+					D[i+1, j+1] = distance / averageSpeed
+					if distance / averageSpeed <= timeDiff
+						G[i+1, j+1] = 1 # add link if vehicle can deadhead from i -> j
+						B[i+1, j+1] = timeDiff - distance / averageSpeed
+						if timeDiff < depot_return_thresh
+							# C[i+1, j+1] = (distance / averageSpeed + timeDiff) * op_cost # cost per hour
+							C[i+1, j+1] = (distance / averageSpeed) * op_cost + (timeDiff - distance / averageSpeed) * idle_cost # cost per hour
+						else
+							V[i+1, j+1] = 1
+							d1 = haversine(coords_1, depot_loc, 6372.8)
+							d2 = haversine(depot_loc, coords_2, 6372.8)
+							D[i+1, j+1] = (d1+d2) / averageSpeed
+							C[i+1, j+1] = ((d1 + d2) / averageSpeed) * op_cost # * 2 # return to depot
+						end
+						if !original && (j > n_original || rta_only)
+							C[i+1, j+1] += q[rta_mask][j-n_original*(!rta_only)] * op_cost
+							Q[i+1, j+1] += q[rta_mask][j-n_original*(!rta_only)] * delay_cost * tts_ratio * r[j]
+						end
 					end
 				end
 			end
@@ -219,11 +266,13 @@ Distributed.@everywhere begin
 		# using longest path to tighten big-M
 		g = SimpleDiGraph(G[2:end, 2:end])
 		m = -1*minimum(Graphs.dijkstra_shortest_paths(g, findall(G[1,2:end]), -1*ones(Int, n-1, n-1)).dists)
-		M = sum(sort(maximum.(eachrow(L_train)), rev=true)[1:m])
-		M = max(M, 0)
+		if isnothing(M)
+			M = sum(sort(maximum.(eachrow(L_train)), rev=true)[1:m])
+			M = max(M, 0)
+		end
 		B[2:end, 1] .= M # *infinite* buffer time when returning to depot
 
-		return VSPInstance(n, M, op_cost, delay_cost, veh_cost, L_train, L_test, r, C, Q, B, D, V, G, this_trips, rta_only, rta_mask)
+		return VSPInstance(n, M, op_cost, idle_cost, delay_cost, veh_cost, tts_ratio, depot_loc, L_train, L_test, r, q, C, Q, B, D, V, G, this_trips, rta_only, original, rta_mask)
 	end
 end
 

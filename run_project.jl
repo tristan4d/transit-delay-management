@@ -2,9 +2,13 @@ using Distributed
 Distributed.@everywhere begin
     import Pkg
     Pkg.activate("./thesis")
+    Pkg.instantiate()
+    Pkg.add("ArgParse")
+    Pkg.add("JSON")
 end
 
 using ArgParse
+using JSON
 
 include("./src/utils.jl")
 include("./src/data.jl")
@@ -14,6 +18,28 @@ include("./src/out.jl")
 include("./src/metrics.jl")
 
 ArgParse.parse_item(::Type{Vector{Int}}, arg::AbstractString) = map(x -> parse(Int, x), split(strip(arg, ['[', ']']), ","))
+
+function parse_nested_vector(arg::AbstractString)
+    # Remove outer brackets
+    arg = strip(arg, ['[', ']', ' '])
+    
+    # Split by "],["
+    pairs_str = split(arg, r"\]\s*,\s*\[")
+    
+    # For each pair, parse the integers
+    result = Vector{Vector{Int}}()
+    for pair_str in pairs_str
+        # Remove any remaining brackets and trim
+        pair_str = strip(pair_str, ['[', ']', ' '])
+        # Split by comma and parse as integers
+        pair = parse.(Int, strip.(split(pair_str, ",")))
+        push!(result, pair)
+    end
+    
+    return result
+end
+
+ArgParse.parse_item(::Type{Vector{Vector{Int}}}, arg::AbstractString) = parse_nested_vector(arg)
 
 function parse_commandline()
     s = ArgParseSettings()
@@ -33,6 +59,9 @@ function parse_commandline()
             action = :store_true    
         "--original"
             help = "Use original trips only"
+            action = :store_true
+        "--check_violations"
+            help = "Check for constraint violations"
             action = :store_true
         "--depot"
             help = "Latitude and longitude for depot"
@@ -69,6 +98,9 @@ function parse_commandline()
         "--max_vehicles"
             help = "Use the same number of vehicles as the minimum operational cost solution + max_vehicles"
             arg_type = Int
+        "--route_pairs"
+            help = "Route pairs to be used (e.g., [[1,2],[3,4]])"
+            arg_type = Vector{Vector{Int}}
         "--routes"
             help = "Routes to be used (e.g., [1,2,3])"
             arg_type = Vector{Int}  # Custom type
@@ -119,7 +151,7 @@ function main()
     trips, _ = loadGTFS("../data/Victoria-GTFS", historical_data)
     
     vic_depot = args["depot"]
-    trips_subset = subsetGTFS(trips; routes = args["routes"], start_time = args["start_time"], stop_time = args["stop_time"])
+    trips_subset = subsetGTFS(trips; routes = args["routes"], start_time = args["start_time"], stop_time = args["stop_time"], randomSeed = args["seed"])
     L_train, L_test = getHistoricalDelays(trips_subset, historical_data; temporal = args["temporal"], split = args["split"], randomSeed = args["seed"])
     r = getHistoricalRidership(trips_subset, historical_data)
     if !isnothing(args["orig_thresh"])
@@ -137,24 +169,41 @@ function main()
     end
     println("=== Building model ===")
     @time begin
-        warmStart = solve!(MCFModel(instance; orig_thresh = orig_thresh,  duplicates = !(args["original"] || args["rta_only"]), timeLimit = 3600))
-        if !isnothing(args["max_vehicles"])
-            max_vehicles = warmStart.numVehicles + args["max_vehicles"]
+        if isnothing(args["route_pairs"])
+            mcf_sol = solve!(MCFModel(instance; orig_thresh = orig_thresh,  duplicates = !(args["original"] || args["rta_only"]), timeLimit = 3600))
+            if !isnothing(args["max_vehicles"])
+                max_vehicles = warmStart.numVehicles + args["max_vehicles"]
+            else
+                max_vehicles = nothing
+            end
+            warmStart = solve!(VSPModel(instance; L_train = mean(instance.L_train, dims=2), max_vehicles = max_vehicles, orig_thresh = orig_thresh, warmStart = mcf_sol, timeLimit = 3600, method = args["method"], silent = true))
+            model = VSPModel(instance; max_vehicles = max_vehicles, orig_thresh = orig_thresh, warmStart = warmStart, timeLimit = time_limit, logFile = log_file, method = args["method"], silent = false)
+            get_current_solution_callback!(model, filename, data_folder)
         else
-            max_vehicles = nothing
+            model = VSPModel(instance; max_vehicles = nothing, orig_thresh = orig_thresh, timeLimit = time_limit, logFile = log_file, method = args["method"], silent = false)
         end
-        model = VSPModel(instance; max_vehicles = max_vehicles, orig_thresh = orig_thresh, warmStart = warmStart, timeLimit = time_limit, endoftrip = true, logFile = log_file, method = args["method"], silent = false)
-        get_current_solution_callback!(model, filename, data_folder)
     end
     println("=== Solving model ===")
     @time begin
-        solution = solve!(model; silent = false)
+        if isnothing(args["route_pairs"])
+            solution = solve!(model; silent = false)
+        else
+            route_pairs = args["route_pairs"]
+            solution = solve!(model, route_pairs; silent = false, check_violations=args["check_violations"])
+        end
     end
     
-    jldsave(
+
+    !isnothing(solution) && jldsave(
         data_file,
         inst=instance,
         x=solution.x,
+        y=solution.y,
+        z=solution.z,
+        Δ=solution.Δ,
+        s=solution.s,
+        s_lo=solution.s_lo,
+        s_hi=solution.s_hi,
         sol_time=solution.solve_time,
         objective_value=solution.objective_value,
         status=termination_status(solution.mod.model)

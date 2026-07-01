@@ -31,8 +31,13 @@ Distributed.@everywhere begin
         numVehicles::Union{Float64, Int} # number of vehicles used
         isInt::Bool # whether the solution is integer or not
         x::Matrix{Bool} # link decision values
+        y::Vector{Float64} # propagated trip delays
+        z::Vector{Float64} # propagated trip delays
+        Δ::Vector{Float64} # propagated trip delays
         s::Vector{Float64} # propagated trip delays
-        s_err::Vector{Float64} # standard deviation of trip delays
+        s_std::Vector{Float64} # standard deviation of trip delays
+        s_lo::Vector{Float64} # 25th percentile of trip delays
+        s_hi::Vector{Float64} # 75th percentile of trip delays
         objective_value::Union{Float64, Vector{Float64}}
         solve_time::Float64
         mod::Union{VSPModel, FirstStageProblem}
@@ -45,7 +50,22 @@ Distributed.@everywhere begin
 
     Optimize the VSP model, `mod`.
     """
-    function solve!(mod::VSPModel; silent=true)
+    function solve!(
+            mod::VSPModel;
+            silent=true,
+            fix_x=nothing,
+            fix_Δ=nothing
+        )
+        if !isnothing(fix_x)
+            for (i, j) in Tuple.(findall(mod.inst.G))
+                fix(mod.x[i, j], fix_x[i, j], force=true)
+            end
+        end
+        if !isnothing(fix_Δ)
+            for i in 1:mod.inst.n - 1
+                fix(mod.Δ[i], fix_Δ[i], force=true)
+            end
+        end
         optimize!(mod.model)
         numTrips = mod.inst.n - 1
         numScenarios = size(mod.inst.L_train, 2)
@@ -53,7 +73,10 @@ Distributed.@everywhere begin
         for (i, j) in Tuple.(findall(mod.inst.G))
             x[i, j] = round(value(mod.x[i, j]))
         end
-        s = value.(mod.s)
+        y = value.(mod.y)
+        z = value.(mod.z)
+        s = y .+ z
+        Δ = value.(mod.Δ)
         isInt = all(isinteger.(x))
         numVehicles = sum(x[1, :])
 
@@ -71,8 +94,167 @@ Distributed.@everywhere begin
             numVehicles,
             all(isinteger.(x)),
             x,
+            vec(mean(y, dims=2)),
+            vec(mean(z, dims=2)),
+            Δ,
             vec(mean(s, dims=2)),
             vec(std(s, dims=2)),
+            vec(quantile.(eachrow(s), 0.25)),
+            vec(quantile.(eachrow(s), 0.75)),
+            objective_value(mod.model),
+            solve_time(mod.model),
+            mod
+        )
+    end
+end
+
+Distributed.@everywhere begin
+    """
+        solve!(mod::VSPModel)
+
+    Optimize the VSP model, `mod`.
+    """
+    function solve!(
+            mod::VSPModel,
+            routes::Vector{Vector{Int}};
+            silent=true,
+            check_violations=false
+        )
+        warmStart = zeros(Bool, mod.inst.n, mod.inst.n)
+        for pair in routes
+            mask = [trip.route_id ∈ pair for trip in eachrow(mod.inst.trips)]
+            trips_subset = mod.inst.trips[mask, :]
+            r = mod.inst.r[mask]
+            mask = vcat([false], mask)
+            L_train, L_test = mod.inst.L_train[mask, :], mod.inst.L_test[mask, :]
+            mask[1] = true
+            sub_G = mod.inst.G[mask, mask]
+            this_instance = VSPInstance(
+                trips_subset,
+                r,
+                L_train,
+                L_test;
+                depot_loc=mod.inst.depot_loc,
+                rta_only=mod.inst.rta_only,
+                original=mod.inst.original,
+                tts_ratio=mod.inst.tts_ratio,
+                M=mod.inst.M,
+                G=sub_G
+            )
+            this_model = VSPModel(
+                this_instance;
+                silent=true,
+                timeLimit=3600,
+                method=1
+            )
+            this_solution = solve!(this_model; silent=silent)
+            warmStart[mask, mask] .= this_solution.x
+        end
+        blocks = generate_blocks(warmStart)
+        # warmStart[2:end, 2:end][mod.inst.B .> 15] .= false
+
+        # Logging for constraint violations in warmstart
+        if check_violations
+            num_violations = 0
+            println("Checking warmstart for constraint violations...")
+            # Check flow constraints
+            for i in 1:mod.inst.n
+                inflow = sum(warmStart[j, i] for j in 1:mod.inst.n if mod.inst.G[j, i])
+                outflow = sum(warmStart[i, j] for j in 1:mod.inst.n if mod.inst.G[i, j])
+                if abs(outflow - inflow) > 1e-6
+                    println("Flow constraint violated at node $i: outflow=$outflow, inflow=$inflow")
+                    trip = mod.inst.trips[i-1, :]
+                    println("trip_id=$(trip[:trip_id]), route_id=$(trip[:route_id]), start_time=$(trip[:start_time]), stop_time=$(trip[:stop_time]), direction_code=$(trip[:direction_code])")
+                    println("blocks: $([block for block in blocks if i-1 in block])")
+                    num_violations += 1
+                end
+            end
+            # Check completeness constraints
+            if mod.inst.rta_only
+                for i in 1:mod.inst.n-1
+                    incount = sum(warmStart[j, i+1] for j in 1:mod.inst.n if mod.inst.G[j, i+1])
+                    if abs(incount - 1) > 1e-6
+                        println("Completeness constraint violated for trip $i: incount=$incount")
+                        trip = mod.inst.trips[i, :]
+                        println("trip_id=$(trip[:trip_id]), route_id=$(trip[:route_id]), start_time=$(trip[:start_time]), stop_time=$(trip[:stop_time]), direction_code=$(trip[:direction_code])")
+                        println("blocks: $([block for block in blocks if i in block])")
+                        num_violations += 1
+                    end
+                end
+            else
+                for i in 1:mod.inst.n-1
+                    if !mod.inst.rta_mask[i]
+                        incount = sum(warmStart[j, i+1] for j in 1:mod.inst.n if mod.inst.G[j, i+1])
+                        if abs(incount - 1) > 1e-6
+                            println("Completeness constraint violated for trip $i: incount=$incount")
+                            trip = mod.inst.trips[i, :]
+                            println("trip_id=$(trip[:trip_id]), route_id=$(trip[:route_id]), start_time=$(trip[:start_time]), stop_time=$(trip[:stop_time]), direction_code=$(trip[:direction_code])")
+                            println("blocks: $([block for block in blocks if i in block])")
+                            num_violations += 1
+                        end
+                    end
+                end
+                # For RTA trips, check the paired constraint
+                for (i, rta) in enumerate(mod.inst.rta_mask)
+                    if rta
+                        paired_trip = mod.inst.n - sum(mod.inst.rta_mask[i+1:end])
+                        incount_i = sum(warmStart[j, i+1] for j in 1:mod.inst.n if mod.inst.G[j, i+1])
+                        incount_paired = sum(warmStart[j, paired_trip] for j in 1:mod.inst.n if mod.inst.G[j, paired_trip])
+                        if abs(incount_i + incount_paired - 1) > 1e-6
+                            println("RTA completeness constraint violated for trip $i and paired $paired_trip: incount_i=$incount_i, incount_paired=$incount_paired")
+                            println(mod.inst.trips[i, :])
+                            println("blocks: $([block for block in blocks if i in block])")
+                            num_violations += 1
+                        end
+                    end
+                end
+            end
+            println("Warmstart constraint check complete.")
+            if num_violations > 0
+                return nothing
+            end
+        end
+
+        for (i, j) in Tuple.(findall(mod.inst.G))
+            # (i == 1 || j == 1) && continue
+            set_start_value(mod.x[i, j], warmStart[i, j])
+        end
+
+        optimize!(mod.model)
+        numTrips = mod.inst.n - 1
+        numScenarios = size(mod.inst.L_train, 2)
+        x = zeros(Bool, mod.inst.n, mod.inst.n)
+        for (i, j) in Tuple.(findall(mod.inst.G))
+            x[i, j] = round(value(mod.x[i, j]))
+        end
+        y = value.(mod.y)
+        z = value.(mod.z)
+        s = y .+ z
+        Δ = value.(mod.Δ)
+        isInt = all(isinteger.(x))
+        numVehicles = sum(x[1, :])
+
+        if !silent
+            @show numTrips
+            @show numScenarios
+            @show numVehicles
+            @show isInt
+            @show termination_status(mod.model)
+            @show objective_value(mod.model)
+            @show solve_time(mod.model)
+        end
+
+        return VSPSolution(
+            numVehicles,
+            all(isinteger.(x)),
+            x,
+            vec(mean(y, dims=2)),
+            vec(mean(z, dims=2)),
+            Δ,
+            vec(mean(s, dims=2)),
+            vec(std(s, dims=2)),
+            vec(quantile.(eachrow(s), 0.25)),
+            vec(quantile.(eachrow(s), 0.75)),
             objective_value(mod.model),
             solve_time(mod.model),
             mod
@@ -246,6 +428,7 @@ number.
 function plotVSP_time(
     x::Union{Matrix{Float64}, Matrix{Bool}},
     instance::VSPInstance;
+    m = nothing,
     plot_size = (800, 600),
     endoftrip = true,
     show_rta = false,
@@ -268,8 +451,12 @@ function plotVSP_time(
     n_original =  size(trips, 1) - sum(rta_mask)
     B = instance.B
     D = instance.D
+    V = instance.V
     x = convert(Matrix{Bool}, round.(x))
 
+    if isnothing(m)
+        m = zeros(Float64, n_original)
+    end
     if isnothing(delays)
         delays = instance.L_test
     end
@@ -286,7 +473,7 @@ function plotVSP_time(
     else
         this_s = zeros(Float64, size(delays))
         for scenario in 1:size(delays, 2)
-            this_s[:, scenario] = feasibleDelays(x, delays[:, scenario], B, endoftrip=endoftrip)
+            this_s[:, scenario] = feasibleDelays(x, delays[:, scenario], B, m=m)
         end
         s = vec(mean(this_s, dims=2))[2:end]
     end
@@ -337,7 +524,7 @@ function plotVSP_time(
         )
         plot!(
             [
-                trips[this_schedule[end], :stop_time],
+                trips[this_schedule[end], :stop_time]+m[this_schedule[end]],
                 trips[this_schedule[end], :stop_time]+D[this_schedule[end]+1, 1]
             ],
             [counter, counter];
@@ -348,51 +535,26 @@ function plotVSP_time(
             lw = 2
         )
         for (i, trip) ∈ enumerate(this_schedule)
-            if trip > n_original
-                rta = true
-                num_rta += 1
-                paired_trip = findall(x -> x, rta_mask)[trip-n_original]
-            else
-                rta = false
-            end
-            if show_rta
-                if rta
-                    plot!(
-                        rectangle(trips[trip, :stop_time]-trips[trip, :start_time], 0.6, trips[trip, :start_time], counter-0.3),
-                        label="",
-                        lc=:blue,
-                        c=:grey
-                    )
-                    plot!(
-                        rectangle(trips[paired_trip, :stop_time]-trips[trip, :start_time], 0.6, trips[trip, :start_time], counter-0.3),
-                        label="",
-                        lc=:blue,
-                        c=get(delay_cmap, (s[trip]-clims[1])/(clims[2]-clims[1]))
-                    )
-                    push!(annot_xs, (trips[trip, :start_time]+trips[paired_trip, :stop_time])/2)
-                else
-                    plot!(
-                        rectangle(trips[trip, :stop_time]-trips[trip, :start_time], 0.6, trips[trip, :start_time], counter-0.3),
-                        label="",
-                        lc=:black,
-                        c=get(delay_cmap, (s[trip]-clims[1])/(clims[2]-clims[1]))
-                    )
-                    push!(annot_xs, (trips[trip, :start_time]+trips[trip, :stop_time])/2)
-                end
-            else
+            if m[trip] > 0
                 plot!(
-                    rectangle(trips[trip, :stop_time]-trips[trip, :start_time], 0.6, trips[trip, :start_time], counter-0.3),
+                    rectangle(trips[trip, :stop_time]-trips[trip, :start_time]+m[trip], 0.6, trips[trip, :start_time], counter-0.3),
                     label="",
-                    lc=:black,
-                    c=get(delay_cmap, (s[trip]-clims[1])/(clims[2]-clims[1]))
+                    lc=:blue,
+                    c=:blue
                 )
-                push!(annot_xs, (trips[trip, :start_time]+trips[trip, :stop_time])/2)
             end
+            plot!(
+                rectangle(trips[trip, :stop_time]-trips[trip, :start_time], 0.6, trips[trip, :start_time], counter-0.3),
+                label="",
+                lc=:black,
+                c=get(delay_cmap, (s[trip]-clims[1])/(clims[2]-clims[1]))
+            )
+            push!(annot_xs, (trips[trip, :start_time]+trips[trip, :stop_time])/2)
             push!(annot_ys, counter)
             push!(
                 annots,
                 Plots.text(
-                    "$(show_trip ? rta ? paired_trip : trip : trips[trip, :route_id])$(show_dir ? "\n" * trips[trip, :direction_code] : "")",
+                    "$(show_trip ? trip : trips[trip, :route_id])$(show_dir ? "\n" * trips[trip, :direction_code] : "")",
                     6,
                     :hcenter,
                     :vcenter,
@@ -401,10 +563,38 @@ function plotVSP_time(
             )
 
             try
-                start = trips[trip, :stop_time]
+                start = trips[trip, :stop_time] + m[trip]
                 stop = trips[this_schedule[i+1], :start_time]
-                if stop - start < 3
-                    deadhead = D[trip+1, this_schedule[i+1]+1]
+                deadhead = D[trip+1, this_schedule[i+1]+1]
+                if V[trip+1, this_schedule[i+1]+1]
+                    deadhead = deadhead / 2
+                    plot!(
+                        [start, start+deadhead],
+                        [counter, counter];
+                        label="",
+                        ls = :solid,
+                        lc = :black,
+                        la = 0.75,
+                        lw = 2
+                    )
+                    plot!(
+                        [start+deadhead, stop-deadhead],
+                        [counter, counter];
+                        label="",
+                        ls = :solid,
+                        lc = :grey,
+                        la = 0.75
+                    )
+                    plot!(
+                        [stop-deadhead, stop],
+                        [counter, counter];
+                        label="",
+                        ls = :solid,
+                        lc = :black,
+                        la = 0.75,
+                        lw = 2
+                    )
+                else
                     plot!(
                         [start, start+deadhead],
                         [counter, counter];
@@ -419,15 +609,6 @@ function plotVSP_time(
                         [counter, counter];
                         label="",
                         ls = :solid,
-                        lc = :black,
-                        la = 0.75
-                    )
-                else
-                    plot!(
-                        [start, stop],
-                        [counter, counter];
-                        label="",
-                        ls = :dash,
                         lc = :black,
                         la = 0.75
                     )
@@ -583,15 +764,21 @@ function feasibleDelays(
     x::Union{Matrix{Float64}, Matrix{Bool}},
     l::Vector{Float64},
     B::Matrix{Float64};
-    endoftrip = true
+    m = nothing,
+    endoftrip = false
 )
     n = size(x, 1)
     s = zeros(Float64, n)
+    if isnothing(m)
+        m = zeros(Float64, n)
+    else
+        m = vcat(0.0, m)
+    end
     delays = ones(Float64, n)
     delays[1] = 0
     iterations = 0
 
-    while any(delays .> eps())
+    while any(abs.(delays) .> eps())
         if iterations > 100
             println("max iterations exceeded")
             break
@@ -599,7 +786,7 @@ function feasibleDelays(
 
         # delays = [x[:, i+1]' * (s .+ l .- B[:, i]) - s[i] for i ∈ 1:n]
         for i in 1:n-1
-            delays[i+1] = x[:, i+1]' * (s .+ l .- B[:, i+1]) - s[i+1]
+            delays[i+1] = max(0, x[:, i+1]' * (s .+ max.(l, m) .- B[:, i+1])) - s[i+1]
         end
 
         iterations += 1
@@ -607,7 +794,9 @@ function feasibleDelays(
     end
 
     if endoftrip
-        s = max.(0, s .+ l) .* (sum(x, dims=2) .> 0)
+        s = s .+ (l .- m) .* (sum(x, dims=2) .> 0)
+    else
+        s = s .+ max.(0, l .- m) .* (sum(x, dims=2) .> 0)
     end
 
     return s

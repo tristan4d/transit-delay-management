@@ -20,15 +20,20 @@ Distributed.@everywhere begin
     - `inst::VSPInstance`: VSP instance on which the model will be applied.
     - `model::JuMP.Model`: JuMP model for optimization.
     - `x::Matrix{VariableRef}`: references to arc decision variables in the `model`.
-    - `s::Matrix{VariableRef}`: references to the propagated delay variables in the `model`.
-    - `endoftrip::Bool`: whether the model is optimizing over end of trip delays or not
+    - `y::Matrix{VariableRef}`: references to the secondary delay variables in the `model`.
+    - `s::Matrix{VariableRef}`: references to the primary delay variables in the `model`.
+    - `m::Matrix{VariableRef}`: references to the travel time variables in the `model`.
     """
     struct VSPModel
         inst::VSPInstance
         model::JuMP.Model
         x::JuMP.Containers.SparseAxisArray{JuMP.VariableRef, 2, Tuple{Int, Int}}
-        s::Matrix{VariableRef}
-        endoftrip::Bool
+        y::Matrix{VariableRef}
+        z::Matrix{VariableRef}
+        Δ::Vector{VariableRef}
+        δ::Matrix{VariableRef}
+        ϕ::JuMP.Containers.SparseAxisArray{JuMP.VariableRef, 3, Tuple{Int, Int, Int}}
+        γ::JuMP.Containers.SparseAxisArray{JuMP.VariableRef, 3, Tuple{Int, Int, Int}}
     end
 end
 
@@ -37,7 +42,6 @@ Distributed.@everywhere begin
         function VSPModel(
             inst::VSPInstance[,
             L_train = nothing,
-            endoftrip = true,
             warmStart = nothing,
             isInt = true,
             multiObj = false,
@@ -56,7 +60,7 @@ Distributed.@everywhere begin
     function VSPModel(
         inst::VSPInstance;
         L_train = nothing,
-        endoftrip = true,
+        α=nothing,
         max_vehicles = nothing,
         orig_thresh = nothing,
         warmStart = nothing,
@@ -87,9 +91,15 @@ Distributed.@everywhere begin
         if isnothing(L_train)
             L_train = inst.L_train
         end
+        if isnothing(α)
+            α = inst.tts_ratio
+        end
         n_train = size(L_train, 2)
         r = inst.r
+        # q = inst.trips.stop_time - inst.trips.start_time
+        q = inst.q
         M = inst.M
+        N = max.(L_train[2:end,:], q)
         C = inst.C
         B = inst.B
         G = inst.G
@@ -102,37 +112,42 @@ Distributed.@everywhere begin
         else
             @variable(model, x[i = 1:n, j = 1:n; G[i, j]] >= 0)
         end
-        # variable for propagated delay at trip i
-        @variable(model, d[1:n-1, 1:n_train] >= 0)
-        # variable for end of trip delay at trip i
-        if endoftrip
-            @variable(model, s[1:n-1, 1:n_train] >= 0)
-        end
-        # nonlinear variable x_ij * d_i
+        # variable for primary delay at trip i
+        @variable(model, y[1:n-1, 1:n_train] >= 0)
+        # variable for secondary delay at trip i
+        @variable(model, z[1:n-1, 1:n_train] >= 0)
+        # variable for travel time at trip i
+        @variable(model, Δ[1:n-1] >= 0)
+        # variable for end of trip at trip i
+        @variable(model, δ[1:n-1, 1:n_train] >= 0)
+        # nonlinear variable x_ij * z_i^s
         @variable(model, ϕ[i = 1:n-1, j = 1:n-1, k in 1:n_train; G[i+1, j+1]] >= 0)
+        # nonlinear variable x_ij * δ_i^s
+        @variable(model, γ[i = 1:n-1, j = 1:n-1, k in 1:n_train; G[i+1, j+1]] >= 0)
         # warm start with provided solution
         if !isnothing(warmStart)
             for (i, j) in Tuple.(findall(G))
                 set_start_value(x[i, j], warmStart.x[i, j])
             end
         end
-        # force non-existant links to 0
-        # @constraint(model, [i = 1:n, j = 1:n; !G[i, j]], x[i, j] == 0)
-        # @constraint(model, [i = 1:n-1, j = 1:n-1; !G[i+1, j+1]], ϕ[i, j, :] == 0)
-        # variable constraints
-        # nonlinear version
-        # @constraint(model, [i = 1:n-1, j = 1:n_train], d[i, j] >= sum(x[2:end, i+1] .* (d[:, j] .+ L_train[2:end, j] .- B[2:end, i+1])))
-        # linear version
-        @constraint(model, [j = 1:n-1, k = 1:n_train], d[j, k] >= sum(ϕ[i, j, k] + x[i+1, j+1] * (L_train[i+1, k] - B[i+1, j+1]) for i in 1:n-1 if G[i+1, j+1]))
-        # McCormick constraints for nonlinear variable
+        # primary delay
+        @constraint(model, [i = 1:n-1, k = 1:n_train], z[i, k] >= L_train[i+1, k] - Δ[i])
+        # secondary delay
+        @constraint(model, [j = 1:n-1, k = 1:n_train], y[j, k] >= sum(ϕ[i, j, k] + γ[i, j, k] - x[i+1, j+1] * B[i+1, j+1] for i in 1:n-1 if G[i+1, j+1]))
+        @constraint(model, [i = 1:n-1], Δ[i] <= q[i])
+        # travel time constraints
+        @constraint(model, [i = 1:n-1], Δ[i] <= sum(x[j, i+1] * B[j, i+1] for j in 1:n if G[j, i+1]))
+        # end of trip constraints
+        @constraint(model, [i = 1:n-1, k = 1:n_train], δ[i, k] >= L_train[i+1, k])
+        @constraint(model, [i = 1:n-1, k = 1:n_train], δ[i, k] >= Δ[i])
+        # McCormick constraints for ϕ
         @constraint(model, [i = 1:n-1, j = 1:n-1, k = 1:n_train; G[i+1, j+1]], ϕ[i, j, k] <= M * x[i+1, j+1])
-        @constraint(model, [i = 1:n-1, j = 1:n-1, k = 1:n_train; G[i+1, j+1]], ϕ[i, j, k] <= d[i, k])
-        @constraint(model, [i = 1:n-1, j = 1:n-1, k = 1:n_train; G[i+1, j+1]], ϕ[i, j, k] >= d[i, k] - M * (1 - x[i+1, j+1]))
-        # end of trip delay
-        if endoftrip
-            @constraint(model, [j = 1:n-1, k = 1:n_train], s[j, k] >= d[j, k] + sum(x[i, j+1] for i in 1:n if G[i, j+1]) * L_train[j+1, k])
-            # @constraint(model, [i = 1:n-1, j = 1:n_train], s[i, j] >= sum(ϕ[i, :, j]) + sum(x[:, i+1]) * L_train[i+1, j])
-        end  
+        @constraint(model, [i = 1:n-1, j = 1:n-1, k = 1:n_train; G[i+1, j+1]], ϕ[i, j, k] <= z[i, k])
+        @constraint(model, [i = 1:n-1, j = 1:n-1, k = 1:n_train; G[i+1, j+1]], ϕ[i, j, k] >= z[i, k] - M * (1 - x[i+1, j+1]))
+        # McCormick constraints for γ
+        @constraint(model, [i = 1:n-1, j = 1:n-1, k = 1:n_train; G[i+1, j+1]], γ[i, j, k] <= N[i, k] * x[i+1, j+1])
+        @constraint(model, [i = 1:n-1, j = 1:n-1, k = 1:n_train; G[i+1, j+1]], γ[i, j, k] <= δ[i, k])
+        @constraint(model, [i = 1:n-1, j = 1:n-1, k = 1:n_train; G[i+1, j+1]], γ[i, j, k] >= δ[i, k] - N[i, k] * (1 - x[i+1, j+1]))
         # flow constraint
         @constraint(model, [i = 1:n], sum(x[i, j] for j in 1:n if G[i, j]) - sum(x[j, i] for j in 1:n if G[j, i]) == 0)
         # require each trip is completed (and no duplicates)
@@ -145,7 +160,8 @@ Distributed.@everywhere begin
             if !isnothing(orig_thresh)
                 @constraint(model, sum(x[i+1, j+1] for i in 1:n-1-sum(rta_mask) for j in 1:n-1-sum(rta_mask) if G[i+1, j+1]) >= orig_thresh)
             end
-            @constraint(model, [i = 1:n-1-sum(rta_mask); !rta_mask[i]], sum(x[j, i+1] for j in 1:n if G[j, i+1]) == 1)
+            @constraint(model, completeness_constraint_in[i = 1:n-1-sum(rta_mask); !rta_mask[i]], sum(x[j, i+1] for j in 1:n if G[j, i+1]) == 1)
+            # @constraint(model, completeness_constraint_out[i = 1:n-1-sum(rta_mask); !rta_mask[i]], sum(x[i+1, j] for j in 1:n if G[i+1, j]) == 1)
             for (i, rta) in enumerate(rta_mask)
                 if rta
                     paired_trip = n-sum(rta_mask[i+1:end])
@@ -153,20 +169,17 @@ Distributed.@everywhere begin
                 end
             end
         end
-        # minimize total propagated delay and link costs
-        @expression(
-            model,
-            delay_expr,
-            endoftrip ? sum(inst.delay_cost * r' * s) / n_train : sum(inst.delay_cost * r' * d) / n_train
-        )
+        # minimize total primary delay, secondary delay, travel time, and link costs
+        @expression(model, delay_expr, sum(inst.delay_cost * r' * (y .+ z)) / n_train)
+        @expression(model, tt_expr, (α * inst.delay_cost * r .+ inst.op_cost)' * Δ)
         @expression(model, cost_expr, sum(C[i, j] * x[i, j] for (i, j) in Tuple.(findall(G))))
         if multiObj
-            @objective(model, Min, [delay_expr, cost_expr])
+            @objective(model, Min, [delay_expr, tt_expr, cost_expr])
         else
-            @objective(model, Min, delay_expr + cost_expr)
+            @objective(model, Min, delay_expr + tt_expr + cost_expr)
         end
 
-        return VSPModel(inst, model, x, endoftrip ? s : d, endoftrip)
+        return VSPModel(inst, model, x, y, z, Δ, δ, ϕ, γ)
     end
 end
 
